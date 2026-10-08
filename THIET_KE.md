@@ -126,3 +126,7 @@ danh sách đối soát (có khiếu nại đổi máy nhưng không có mail, c
    - Người dùng chọn ca / xác nhận "không có ca mới" / bỏ xác nhận ở drawer hồ sơ (`PUT /api/bao-cao/ca-moi/:caseGoc`).
    - Ca mới hoàn thành (tiến độ "Hoàn thành…") = mốc ĐỔI TRẢ THÀNH CÔNG. Đối soát: duyệt > 7 ngày chưa có ca mới.
    - Ca cũ từ CRM chưa có `id_khach_hang` → trạng thái "không có ID KH" cho tới khi pipeline gửi lại.
+
+7. ✅ Kết thúc luồng / gán ca đổi thủ công từ DVBH (migration 0007, `src/doiTra.ts`): `luong.ket_thuc_*` - luồng đã kết thúc
+   không còn truy vấn DVBH (đồng bộ 3h, tìm ca mới, gắn lại ban đêm); bảng `nhat_ky` ghi ai làm gì ("Hệ thống" khi tự động).
+   API đối tác: `POST /api/partner/doi-tra/{ket-thuc|mo-lai|ca-moi}`, `GET /api/partner/luong-list` (tab "Luồng duyệt đổi trả" DVBH).

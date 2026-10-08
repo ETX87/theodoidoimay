@@ -1,6 +1,6 @@
 import { baoCao, chiTietHoSo, dongBoTranhChap } from "./baoCao";
 import { lamGonThu } from "./gonThu";
-import { xacNhanCaMoi } from "./caMoi";
+import { danhSachLuong, ganCaMoi, ghiNhatKy, HE_THONG, ketThucLuong, moLaiLuong, nhatKyCase } from "./doiTra";
 import { caseTheoId, caseTheoSerial, type DvbhCase } from "./dvbh";
 import {
   bangDeXuat,
@@ -57,7 +57,7 @@ export default {
       return;
     }
     const pending = await env.DB.prepare(
-      "SELECT id FROM luong WHERE match_status != 'da_gan' ORDER BY last_at DESC LIMIT 200",
+      "SELECT id FROM luong WHERE match_status != 'da_gan' AND ket_thuc_at IS NULL ORDER BY last_at DESC LIMIT 200",
     ).all<{ id: number }>();
     for (const { id } of pending.results) await ganDvbh(env, id);
     await env.DB.prepare(`DELETE FROM bo_qua WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${BO_QUA_GIU_NGAY} days')`).run();
@@ -84,6 +84,26 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
     if (!(await safeEqual(req.headers.get("X-API-Key") ?? "", env.PARTNER_API_KEY))) throw new HttpError(401, "Sai API key");
     return json(await luongChoDvbh(env, (url.searchParams.get("id") ?? "").trim().toUpperCase()));
   }
+  if (p === "/api/partner/luong-list" && m === "GET") {
+    if (!(await safeEqual(req.headers.get("X-API-Key") ?? "", env.PARTNER_API_KEY))) throw new HttpError(401, "Sai API key");
+    return json(await danhSachLuong(env));
+  }
+  // Thao tac tu DVBH: DVBH da kiem tra dang nhap + quyen, gui kem ten nguoi thao tac de ghi nhat ky.
+  const thaoTac = p.match(/^\/api\/partner\/doi-tra\/(ket-thuc|mo-lai|ca-moi)$/);
+  if (thaoTac && m === "POST") {
+    if (!(await safeEqual(req.headers.get("X-API-Key") ?? "", env.PARTNER_API_KEY))) throw new HttpError(401, "Sai API key");
+    const b = (await req.json()) as { case_id?: string; nguoi?: string; email?: string; ghi_chu?: string; ca_moi_id?: string | null };
+    const caseId = String(b.case_id ?? "").trim().toUpperCase();
+    const nguoi = String(b.nguoi ?? "").trim();
+    if (!caseId || !nguoi) throw new HttpError(400, "Thiếu case_id hoặc nguoi");
+    const ai = { nguoi, email: String(b.email ?? "") };
+    const ghiChu = String(b.ghi_chu ?? "").trim();
+    const kq =
+      thaoTac[1] === "ket-thuc" ? await ketThucLuong(env, caseId, ai, ghiChu)
+      : thaoTac[1] === "mo-lai" ? await moLaiLuong(env, caseId, ai, ghiChu)
+      : await ganCaMoi(env, caseId, b.ca_moi_id === undefined ? null : b.ca_moi_id, ai);
+    return json(kq, kq.ok ? 200 : (kq.status ?? 400));
+  }
   if (p === "/api/admin/dong-bo" && m === "POST") {
     if (!(await safeEqual(req.headers.get("X-Ingest-Key") ?? "", env.INGEST_KEY))) throw new HttpError(401, "Sai INGEST_KEY");
     return json(await dongBoTranhChap(env));
@@ -107,7 +127,7 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   const caMoi = p.match(/^\/api\/bao-cao\/ca-moi\/([A-Za-z0-9]+)$/);
   if (caMoi && m === "PUT") {
     const b = (await req.json()) as { ca_moi_id?: string | null };
-    return json(await xacNhanCaMoi(env, caMoi[1].toUpperCase(), b.ca_moi_id === undefined ? null : b.ca_moi_id));
+    return json(await ganCaMoi(env, caMoi[1].toUpperCase(), b.ca_moi_id === undefined ? null : b.ca_moi_id, { nguoi: "Trang báo cáo" }));
   }
   if (p === "/api/stats" && m === "GET") return json(await stats(env));
   if (p === "/api/luong" && m === "GET") return json(await listLuong(env, url.searchParams));
@@ -438,12 +458,13 @@ async function ganDvbh(env: Env, luongId: number): Promise<number> {
         await gopLuong(env, luongId, other.id);
         return other.id;
       }
-      await env.DB.prepare(
-        `UPDATE luong SET dvbh_case_id = ?2, match_status = 'da_gan', match_note = '', dvbh_json = ?3,
-           dvbh_checked_at = ${NOW_SQL} WHERE id = ?1`,
-      )
-        .bind(luongId, found.id, JSON.stringify(found))
-        .run();
+      await env.DB.batch([
+        env.DB.prepare(
+          `UPDATE luong SET dvbh_case_id = ?2, match_status = 'da_gan', match_note = '', dvbh_json = ?3,
+             dvbh_checked_at = ${NOW_SQL} WHERE id = ?1`,
+        ).bind(luongId, found.id, JSON.stringify(found)),
+        ghiNhatKy(env, found.id, "tao_tu_mail", { nguoi: HE_THONG }, `Tự động từ mail (gắn theo ${l.ma_trong_mail ? "mã case" : "serial"})`),
+      ]);
     } else {
       await env.DB.prepare(`UPDATE luong SET match_status = ?2, match_note = ?3, dvbh_checked_at = ${NOW_SQL} WHERE id = ?1`)
         .bind(luongId, status, note)
@@ -571,7 +592,8 @@ async function luongChoDvbh(env: Env, caseId: string) {
   const l = await env.DB.prepare(
     `SELECT id, dvbh_case_id, trang_thai, match_status, loai_yeu_cau, serial, subject, origin_name, origin_email,
             origin_domain, origin_at, last_at, msg_count, tiep_nhan_at, de_xuat_at, de_xuat_from, duyet_at, duyet_from,
-            duyet_xac_nhan, giao_xu_ly_at, len_so_at, len_do_at, de_xuat_json, ghi_chu
+            duyet_xac_nhan, giao_xu_ly_at, len_so_at, len_do_at, de_xuat_json, ghi_chu,
+            ket_thuc_at, ket_thuc_boi, ket_thuc_ghi_chu, created_at
      FROM luong WHERE dvbh_case_id = ?`,
   )
     .bind(caseId)
@@ -594,6 +616,7 @@ async function luongChoDvbh(env: Env, caseId: string) {
     found: true,
     luong: { ...l, de_xuat: JSON.parse(String(l.de_xuat_json || "{}")), de_xuat_json: undefined },
     ca_moi: cm ? { ...cm, ung_vien: JSON.parse(String(cm.ung_vien_json || "[]")), ung_vien_json: undefined } : null,
+    nhat_ky: await nhatKyCase(env, caseId),
     thu: thu.results.map((t) => ({
       ...t,
       ...lamGonThu(String(t.body_new ?? "")), // noi_dung (da lam gon, de hien thi) + tom_tat (1 dong)
