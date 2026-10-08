@@ -1,0 +1,21 @@
+{
+  "name": "thuky-mail",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "db:migrate:local": "wrangler d1 migrations apply thuky-mail-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply thuky-mail-db --remote",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "*",
+    "typescript": "^5.6.0",
+    "wrangler": "^4.148.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20261006.1": true
+  }
+}
