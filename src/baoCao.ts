@@ -1,6 +1,7 @@
 // Bao cao vong doi doi tra = ghep 2 nguon theo ma case DVBH:
 //   - Ho so "Tranh chấp, khiếu nại" cua DVBH (dong bo ve bang tc_doi_may): phat sinh yeu cau doi, CSKH xu ly, ket thuc.
 //   - Luong mail (bang luong): Karofi tiep nhan, de xuat doi, TBP duyet, giao xu ly, len SO, len DO.
+import { timCaMoi } from "./caMoi";
 import type { Env } from "./index";
 
 const PHAN_LOAI_DOI_MAY = ["KH đòi đổi máy", "Đổi trả"];
@@ -115,7 +116,8 @@ export async function dongBoTranhChap(env: Env) {
     );
     for (let i = 0; i < up.length; i += 50) await env.DB.batch(up.slice(i, i + 50));
   }
-  const ketQua = { ho_so: tt.results.length, log: logs.results.length, luong_lam_moi: ids2.length };
+  const caMoi = await timCaMoi(env, now);
+  const ketQua = { ho_so: tt.results.length, log: logs.results.length, luong_lam_moi: ids2.length, ca_moi: caMoi };
   await env.DB.prepare("INSERT OR REPLACE INTO dong_bo (ten, lan_cuoi, ket_qua) VALUES ('tranh_chap', ?, ?)")
     .bind(now, JSON.stringify(ketQua))
     .run();
@@ -164,7 +166,7 @@ interface LuongDb {
 
 export const TRANG_THAI_HO_SO = [
   "moi_phat_sinh", "cskh_xu_ly", "cho_duyet", "da_duyet", "giao_xu_ly", "da_len_so", "da_len_do",
-  "dong_hoan_thanh", "dong_that_bai",
+  "da_mo_ca_moi", "doi_thanh_cong", "dong_hoan_thanh", "dong_that_bai",
 ] as const;
 
 const BUOC: [string, string, string][] = [
@@ -174,18 +176,25 @@ const BUOC: [string, string, string][] = [
   ["duyet_den_giao", "duyet_at", "giao_xu_ly_at"],
   ["giao_den_so", "giao_xu_ly_at", "len_so_at"],
   ["so_den_do", "len_so_at", "len_do_at"],
+  ["duyet_den_ca_moi", "duyet_at", "ca_moi_tn_at"],
+  ["ca_moi_den_thanh_cong", "ca_moi_tn_at", "thanh_cong_at"],
+  ["yc_den_thanh_cong", "yc_at", "thanh_cong_at"],
   ["yc_den_ket_thuc", "yc_at", "ket_thuc_at"],
 ];
 
 export async function baoCao(env: Env, sp: URLSearchParams) {
   const theoDoiTu = env.THEO_DOI_TU || "2026-10-08";
-  const [tcRes, luongRes, dongBo] = await env.DB.batch([
+  const [tcRes, luongRes, dongBo, caMoiRes] = await env.DB.batch([
     env.DB.prepare(`SELECT tien_trinh_id, case_id, phan_loai, muc_do, yc_at, cskh_at, ket_thuc_at, ket_thuc_loai, trang_thai, ket_qua,
                            cap_nhat_at, hang, khu_vuc, tinh, ky_thuat_vien, san_pham FROM tc_doi_may ORDER BY yc_at`),
     env.DB.prepare(`SELECT id, dvbh_case_id, match_status, trang_thai, loai_yeu_cau, subject, origin_email, origin_at, last_at,
                            tiep_nhan_at, de_xuat_at, duyet_at, giao_xu_ly_at, len_so_at, len_do_at, dvbh_json FROM luong`),
     env.DB.prepare("SELECT lan_cuoi, ket_qua FROM dong_bo WHERE ten = 'tranh_chap'"),
+    env.DB.prepare("SELECT case_goc, ca_moi_id, trang_thai_gan, ung_vien_json, ca_moi_tn_at, ca_moi_ht_at, ca_moi_tien_do FROM ca_moi"),
   ]);
+  const caMoiMap = new Map(
+    (caMoiRes.results as { case_goc: string; ca_moi_id: string | null; trang_thai_gan: string; ung_vien_json: string; ca_moi_tn_at: string | null; ca_moi_ht_at: string | null; ca_moi_tien_do: string }[]).map((r) => [r.case_goc, r]),
+  );
   const tcs = tcRes.results as unknown as TcDb[];
   const luongs = luongRes.results as unknown as LuongDb[];
 
@@ -201,6 +210,9 @@ export async function baoCao(env: Env, sp: URLSearchParams) {
     const t = tcByCase.get(caseId);
     const l = luongByCase.get(caseId);
     const dv = l ? (JSON.parse(l.dvbh_json || "{}") as Record<string, string | null>) : {};
+    const cm = caMoiMap.get(caseId);
+    // Ca moi chi tinh "thanh cong" khi DVBH ghi nhan hoan thanh (tien do bat dau "Hoàn thành").
+    const thanhCongAt = cm?.ca_moi_id && cm.ca_moi_ht_at && /^Hoàn thành/i.test(cm.ca_moi_tien_do) ? cm.ca_moi_ht_at : null;
     const moc = {
       yc_at: t?.yc_at ?? null,
       cskh_at: t?.cskh_at ?? null,
@@ -211,6 +223,8 @@ export async function baoCao(env: Env, sp: URLSearchParams) {
       giao_xu_ly_at: l?.giao_xu_ly_at ?? null,
       len_so_at: l?.len_so_at ?? null,
       len_do_at: l?.len_do_at ?? null,
+      ca_moi_tn_at: cm?.ca_moi_id ? cm.ca_moi_tn_at : null,
+      thanh_cong_at: thanhCongAt,
       ket_thuc_at: t?.ket_thuc_at ?? null,
     };
     const phatSinh = [moc.yc_at, moc.mail_goc_at].filter(Boolean).sort()[0] ?? null;
@@ -218,6 +232,8 @@ export async function baoCao(env: Env, sp: URLSearchParams) {
 
     let trangThai: (typeof TRANG_THAI_HO_SO)[number];
     if (t?.ket_thuc_loai === "that_bai") trangThai = "dong_that_bai";
+    else if (moc.thanh_cong_at) trangThai = "doi_thanh_cong";
+    else if (moc.ca_moi_tn_at) trangThai = "da_mo_ca_moi";
     else if (moc.len_do_at) trangThai = "da_len_do";
     else if (moc.len_so_at) trangThai = "da_len_so";
     else if (moc.giao_xu_ly_at) trangThai = "giao_xu_ly";
@@ -227,7 +243,7 @@ export async function baoCao(env: Env, sp: URLSearchParams) {
     else if (moc.cskh_at) trangThai = "cskh_xu_ly";
     else trangThai = "moi_phat_sinh";
 
-    const dangMo = !["da_len_do", "dong_hoan_thanh", "dong_that_bai"].includes(trangThai) && !t?.ket_thuc_at;
+    const dangMo = !["doi_thanh_cong", "dong_hoan_thanh", "dong_that_bai"].includes(trangThai) && !t?.ket_thuc_at;
     // Chi tinh cho ho so dang mo (ho so da dong/da len DO khong con "khong hoat dong").
     const ngayKhongHoatDong = dangMo && hoatDongCuoi ? Math.floor((now - Date.parse(hoatDongCuoi)) / 86400_000) : null;
 
@@ -236,6 +252,8 @@ export async function baoCao(env: Env, sp: URLSearchParams) {
     if (l?.de_xuat_at && !t) doiSoat.push("mail_chua_tc");
     if (t && moc.duyet_at && !t.ket_thuc_at && (t.cap_nhat_at ?? "") < moc.duyet_at) doiSoat.push("duyet_tc_chua_cap_nhat");
     if (dangMo && ngayKhongHoatDong !== null && ngayKhongHoatDong > KET_NGAY) doiSoat.push("ket");
+    if (cm && (cm.trang_thai_gan === "goi_y" || cm.trang_thai_gan === "nhieu_ung_vien")) doiSoat.push("ca_moi_can_xac_nhan");
+    if (moc.duyet_at && !moc.ca_moi_tn_at && t?.ket_thuc_loai !== "that_bai" && now - Date.parse(moc.duyet_at) > 7 * 86400_000) doiSoat.push("duyet_chua_ca_moi");
 
     return {
       case_id: caseId,
@@ -251,6 +269,9 @@ export async function baoCao(env: Env, sp: URLSearchParams) {
       san_pham: t?.san_pham || dv.san_pham_bao_hanh || "",
       tc_trang_thai: t?.trang_thai ?? "",
       tc_ket_qua: t?.ket_qua ?? "",
+      ca_moi_id: cm?.ca_moi_id ?? null,
+      ca_moi_gan: cm?.trang_thai_gan ?? "",
+      ca_moi_ung_vien: cm ? (JSON.parse(cm.ung_vien_json || "[]") as unknown[]).length : 0,
       trang_thai: trangThai,
       phat_sinh_at: phatSinh,
       hoat_dong_cuoi_at: hoatDongCuoi,
@@ -305,6 +326,8 @@ export async function baoCao(env: Env, sp: URLSearchParams) {
       mail_chua_tc: dem((h) => h.doi_soat.includes("mail_chua_tc")),
       duyet_tc_chua_cap_nhat: dem((h) => h.doi_soat.includes("duyet_tc_chua_cap_nhat")),
       ket: dem((h) => h.doi_soat.includes("ket")),
+      ca_moi_can_xac_nhan: dem((h) => h.doi_soat.includes("ca_moi_can_xac_nhan")),
+      duyet_chua_ca_moi: dem((h) => h.doi_soat.includes("duyet_chua_ca_moi")),
       luong_chua_gan: luongs.filter((l) => !l.dvbh_case_id).length,
     },
     thoi_gian: thoiGian,
@@ -317,10 +340,12 @@ export async function baoCao(env: Env, sp: URLSearchParams) {
 }
 
 export async function chiTietHoSo(env: Env, caseId: string) {
-  const [tc, luong] = await env.DB.batch([
+  const [tc, luong, cm] = await env.DB.batch([
     env.DB.prepare("SELECT * FROM tc_doi_may WHERE case_id = ? ORDER BY yc_at").bind(caseId),
     env.DB.prepare("SELECT id FROM luong WHERE dvbh_case_id = ?").bind(caseId),
+    env.DB.prepare("SELECT * FROM ca_moi WHERE case_goc = ?").bind(caseId),
   ]);
+  const caMoi = cm.results[0] as Record<string, unknown> | undefined;
   const luongId = (luong.results[0] as { id?: number } | undefined)?.id;
   const thu = luongId
     ? await env.DB.prepare(
@@ -333,5 +358,6 @@ export async function chiTietHoSo(env: Env, caseId: string) {
   return {
     tranh_chap: (tc.results as Record<string, unknown>[]).map((t) => ({ ...t, logs: JSON.parse(String(t.logs_json || "[]")), logs_json: undefined })),
     thu: thu.results,
+    ca_moi: caMoi ? { ...caMoi, ung_vien: JSON.parse(String(caMoi.ung_vien_json || "[]")), ung_vien_json: undefined } : null,
   };
 }

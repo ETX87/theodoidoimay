@@ -119,4 +119,10 @@ danh sách đối soát (có khiếu nại đổi máy nhưng không có mail, c
      → đóng hồ sơ (DVBH). Thời gian trung bình từng bước; tab đối soát: có yêu cầu đổi chưa có mail (từ `THEO_DOI_TU`),
      có mail chưa có hồ sơ DVBH, đã duyệt mà DVBH chưa cập nhật, kẹt > 3 ngày, luồng chưa gắn case. Xuất CSV.
    - App Khiếu nại: chưa nối (chưa có dữ liệu đổi máy để nối); thêm khi nhánh đổi máy bên đó được dùng.
-6. Ca mới đổi cho KH (mốc "đổi trả thành công" theo ca mới): chờ pipeline QuickSight gửi `id_khach_hang`.
+6. ✅ Ca mới đổi cho KH (bảng `ca_moi`, `src/caMoi.ts`, chạy trong lượt đồng bộ 3h):
+   - Ứng viên = case DVBH cùng `id_khach_hang` với ca gốc, tiếp nhận trong 60 ngày sau mốc duyệt (không tra SĐT).
+   - Tự gán khi ĐÚNG 1 ứng viên khớp model (cùng sản phẩm hoặc mã model trong "Máy/Linh kiện đề xuất đổi");
+     còn lại (nhiều ứng viên / 1 ứng viên không khớp model) → tab "Ca mới cần xác nhận" (ID Odoo có thể là đại lý/siêu thị dùng chung).
+   - Người dùng chọn ca / xác nhận "không có ca mới" / bỏ xác nhận ở drawer hồ sơ (`PUT /api/bao-cao/ca-moi/:caseGoc`).
+   - Ca mới hoàn thành (tiến độ "Hoàn thành…") = mốc ĐỔI TRẢ THÀNH CÔNG. Đối soát: duyệt > 7 ngày chưa có ca mới.
+   - Ca cũ từ CRM chưa có `id_khach_hang` → trạng thái "không có ID KH" cho tới khi pipeline gửi lại.

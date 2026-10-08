@@ -1,4 +1,5 @@
 import { baoCao, chiTietHoSo, dongBoTranhChap } from "./baoCao";
+import { xacNhanCaMoi } from "./caMoi";
 import { caseTheoId, caseTheoSerial, type DvbhCase } from "./dvbh";
 import {
   bangDeXuat,
@@ -102,6 +103,11 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   if (p === "/api/bao-cao/dong-bo" && m === "POST") return json(await dongBoTranhChap(env));
   const hoSo = p.match(/^\/api\/bao-cao\/ho-so\/([A-Za-z0-9]+)$/);
   if (hoSo && m === "GET") return json(await chiTietHoSo(env, hoSo[1].toUpperCase()));
+  const caMoi = p.match(/^\/api\/bao-cao\/ca-moi\/([A-Za-z0-9]+)$/);
+  if (caMoi && m === "PUT") {
+    const b = (await req.json()) as { ca_moi_id?: string | null };
+    return json(await xacNhanCaMoi(env, caMoi[1].toUpperCase(), b.ca_moi_id === undefined ? null : b.ca_moi_id));
+  }
   if (p === "/api/stats" && m === "GET") return json(await stats(env));
   if (p === "/api/luong" && m === "GET") return json(await listLuong(env, url.searchParams));
   if (p === "/api/bo-qua" && m === "GET") {

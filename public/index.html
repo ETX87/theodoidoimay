@@ -120,7 +120,12 @@
 const TRANG_THAI = {
   moi_phat_sinh: ["Mới phát sinh", "gray"], cskh_xu_ly: ["CSKH đang xử lý", "blue"], cho_duyet: ["Chờ duyệt đổi", "amber"],
   da_duyet: ["Đã duyệt đổi", "teal"], giao_xu_ly: ["Karofi giao xử lý", "violet"], da_len_so: ["Đã lên SO", "violet"],
-  da_len_do: ["Đã lên DO", "green"], dong_hoan_thanh: ["Đóng (không có mail)", "gray"], dong_that_bai: ["Đóng thất bại", "red"],
+  da_len_do: ["Đã lên DO", "violet"], da_mo_ca_moi: ["Đã mở ca mới", "blue"], doi_thanh_cong: ["Đổi trả thành công", "green"],
+  dong_hoan_thanh: ["Đóng (không có mail)", "gray"], dong_that_bai: ["Đóng thất bại", "red"],
+};
+const CA_MOI_GAN = {
+  tu_dong: "Tự gắn (khớp ID KH + model)", xac_nhan: "Đã xác nhận tay", goi_y: "Gợi ý – cần xác nhận",
+  nhieu_ung_vien: "Nhiều ứng viên – cần xác nhận", chua_co: "Chưa có ca mới", khong_co_id_kh: "Ca gốc chưa có ID khách hàng",
 };
 // Trang thai nhat ky Tranh chap DVBH (luu khong dau) -> nhan hien thi.
 const TC_TRANG_THAI = {
@@ -142,7 +147,8 @@ const gonThu = (s) => {
 const NGUON = { ca_hai: "Tranh chấp + mail", tranh_chap: "Chỉ tranh chấp", mail: "Chỉ mail" };
 const BUOC = [
   ["yc_den_de_xuat", "Yêu cầu đổi → Đề xuất"], ["de_xuat_den_duyet", "Đề xuất → Duyệt"], ["duyet_den_giao", "Duyệt → Giao xử lý"],
-  ["giao_den_so", "Giao xử lý → Lên SO"], ["so_den_do", "Lên SO → Lên DO"], ["yc_den_ket_thuc", "Yêu cầu → Đóng hồ sơ"],
+  ["giao_den_so", "Giao xử lý → Lên SO"], ["so_den_do", "Lên SO → Lên DO"], ["duyet_den_ca_moi", "Duyệt → Mở ca mới"],
+  ["ca_moi_den_thanh_cong", "Mở ca mới → Thành công"], ["yc_den_thanh_cong", "Yêu cầu → Đổi thành công"], ["yc_den_ket_thuc", "Yêu cầu → Đóng hồ sơ"],
 ];
 const TABS = [
   ["", "Tất cả hồ sơ", "Mỗi hồ sơ = 1 case DVBH có yêu cầu đổi máy (module Tranh chấp, khiếu nại) và/hoặc có luồng mail đổi trả."],
@@ -150,6 +156,8 @@ const TABS = [
   ["mail_chua_tc", "Có mail đề xuất, chưa có hồ sơ DVBH", "Đã có mail đề xuất đổi nhưng DVBH chưa tạo hồ sơ Tranh chấp, khiếu nại cho case."],
   ["duyet_tc_chua_cap_nhat", "Đã duyệt, hồ sơ DVBH chưa cập nhật", "TBP đã duyệt qua mail nhưng nhật ký hồ sơ DVBH chưa có cập nhật nào sau thời điểm duyệt."],
   ["ket", "Kẹt > 3 ngày", "Hồ sơ đang mở, không có hoạt động (mail hoặc nhật ký DVBH) quá 3 ngày."],
+  ["ca_moi_can_xac_nhan", "Ca mới cần xác nhận", "Có ca cùng ID khách hàng mở sau khi duyệt nhưng chưa chắc là ca đổi cho KH (nhiều ứng viên, hoặc khác model) → bấm vào hồ sơ để chọn."],
+  ["duyet_chua_ca_moi", "Duyệt > 7 ngày chưa có ca mới", "Đã duyệt đổi hơn 7 ngày nhưng chưa thấy ca mới cùng ID khách hàng trên DVBH."],
   ["luong_chua_gan", "Luồng mail chưa gắn case", "Luồng mail đúng tên miền nhưng chưa xác định được case DVBH (không có mã case/serial khớp)."],
 ];
 
@@ -203,7 +211,8 @@ function renderTiles() {
     ["CSKH đang xử lý", t.cskh_xu_ly + t.moi_phat_sinh, "chưa trình mail đề xuất"],
     ["Chờ duyệt đổi", t.cho_duyet, "đã gửi mail đề xuất"],
     ["Đã duyệt, đang đổi", t.da_duyet + t.giao_xu_ly + t.da_len_so, "duyệt → lên SO"],
-    ["Đã lên DO", t.da_len_do, "đã xuất giao máy"],
+    ["Lên DO / mở ca mới", t.da_len_do + t.da_mo_ca_moi, "đang giao máy đổi"],
+    ["Đổi trả thành công", t.doi_thanh_cong, "ca mới đã hoàn thành"],
     ["Đóng thất bại", t.dong_that_bai, "theo nhật ký DVBH"],
     ["Kẹt > 3 ngày", ds.ket, "đang mở, không hoạt động"],
   ];
@@ -230,14 +239,15 @@ function renderTable() {
     return;
   }
   $("thead").innerHTML = `<tr><th>Mã case</th><th>Hãng</th><th>Khu vực</th><th>Nguồn</th><th>Trạng thái</th><th>Yêu cầu đổi</th>
-    <th>Đề xuất</th><th>Duyệt</th><th>Giao XL</th><th>Lên SO</th><th>Lên DO</th><th>Đóng hồ sơ</th><th>Không HĐ</th></tr>`;
+    <th>Đề xuất</th><th>Duyệt</th><th>Giao XL</th><th>Lên SO</th><th>Lên DO</th><th>Ca mới</th><th>Thành công</th><th>Đóng hồ sơ</th><th>Không HĐ</th></tr>`;
   const r = rows();
   $("tbody").innerHTML = r.length ? r.map((h) => `<tr data-c="${esc(h.case_id)}">
       <td><b>${esc(h.case_id)}</b></td><td>${esc(h.hang)}</td><td>${esc(h.khu_vuc.replace(/^\(.*?\)\s*/, ""))}</td>
       <td>${NGUON[h.nguon]}</td><td>${badge(h.trang_thai)}</td><td>${fmt(h.yc_at || h.mail_goc_at)}</td>
       <td>${fmt(h.de_xuat_at)}</td><td>${fmt(h.duyet_at)}</td><td>${fmt(h.giao_xu_ly_at)}</td><td>${fmt(h.len_so_at)}</td>
-      <td>${fmt(h.len_do_at)}</td><td>${fmt(h.ket_thuc_at)}</td><td class="num">${h.ngay_khong_hoat_dong ?? ""}${h.ngay_khong_hoat_dong != null ? " ngày" : ""}</td></tr>`).join("")
-    : `<tr><td colspan="13" class="empty">Không có hồ sơ</td></tr>`;
+      <td>${fmt(h.len_do_at)}</td><td>${h.ca_moi_id ? `<b>${esc(h.ca_moi_id)}</b> ${fmt(h.ca_moi_tn_at)}` : h.ca_moi_ung_vien ? `<span class="badge b-amber">${h.ca_moi_ung_vien} gợi ý</span>` : ""}</td>
+      <td>${fmt(h.thanh_cong_at)}</td><td>${fmt(h.ket_thuc_at)}</td><td class="num">${h.ngay_khong_hoat_dong ?? ""}${h.ngay_khong_hoat_dong != null ? " ngày" : ""}</td></tr>`).join("")
+    : `<tr><td colspan="15" class="empty">Không có hồ sơ</td></tr>`;
   for (const tr of $("tbody").querySelectorAll("tr[data-c]")) tr.onclick = () => openDrawer(tr.dataset.c);
 }
 
@@ -256,6 +266,9 @@ async function openDrawer(caseId) {
     const nhan = [t.la_de_xuat ? "Đề xuất đổi" : "", t.la_duyet ? "Duyệt" : "", MOC[t.moc] || ""].filter(Boolean).join(", ");
     ev.push({ at: t.sent_at, nguon: "Mail", tieu_de: (nhan ? `[${nhan}] ` : "") + (t.from_name || t.from_email), noi_dung: gonThu(t.body_new), link: t.nguon === "gmail" ? `https://mail.google.com/mail/u/?authuser=theodoidoimay@gmail.com#all/${t.gmail_id}` : null });
   }
+  const cm = d.ca_moi;
+  if (cm?.ca_moi_id && cm.ca_moi_tn_at) ev.push({ at: cm.ca_moi_tn_at, nguon: "DVBH ca mới", tieu_de: `Mở ca mới ${cm.ca_moi_id}`, noi_dung: cm.ca_moi_san_pham || "" });
+  if (h.thanh_cong_at) ev.push({ at: h.thanh_cong_at, nguon: "DVBH ca mới", tieu_de: `Đổi trả thành công – ca ${cm.ca_moi_id} ${cm.ca_moi_tien_do}`, noi_dung: "" });
   ev.sort((a, b) => (a.at || "").localeCompare(b.at || ""));
   $("drawer").innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
@@ -263,10 +276,38 @@ async function openDrawer(caseId) {
     </div>
     <div style="margin:6px 0">${badge(h.trang_thai)} <span class="muted">${esc(h.hang)} · ${esc(h.tinh)} · ${esc(h.san_pham)}</span></div>
     <div class="muted">KTV: ${esc(h.ky_thuat_vien) || "—"} · Phân loại DVBH: ${esc(h.phan_loai) || "—"} · Trạng thái DVBH: ${esc(tcNhan(h.tc_trang_thai))}</div>
+    ${caMoiHtml(cm)}
     <ul class="tl">${ev.map((e) => `<li><div class="t">${fmtFull(e.at)} · ${esc(e.nguon)}${e.ai ? " · " + esc(e.ai) : ""}</div>
       <div><b>${esc(e.tieu_de)}</b>${e.link ? ` · <a href="${e.link}" target="_blank" rel="noreferrer">Gmail</a>` : ""}</div>
       ${e.noi_dung ? `<div class="b">${esc(e.noi_dung.length > 600 ? e.noi_dung.slice(0, 600) + "…" : e.noi_dung)}</div>` : ""}</li>`).join("")}</ul>`;
   $("closeDrawer").onclick = () => $("drawer").classList.remove("on");
+  for (const b of $("drawer").querySelectorAll("button[data-camoi]")) {
+    b.onclick = async () => {
+      const v = b.dataset.camoi;
+      await api("/bao-cao/ca-moi/" + encodeURIComponent(caseId), { method: "PUT", body: JSON.stringify({ ca_moi_id: v === "__bo__" ? null : v }) });
+      await load();
+      openDrawer(caseId);
+    };
+  }
+}
+
+/** Khung "Ca mới đổi cho KH": trạng thái gắn + danh sách ứng viên cùng ID khách hàng để xác nhận tay. */
+function caMoiHtml(cm) {
+  if (!cm) return `<div class="tile" style="margin-top:10px"><div class="k">Ca mới đổi cho KH</div><div class="s">Chỉ tìm cho hồ sơ đã duyệt đổi qua mail.</div></div>`;
+  const uv = cm.ung_vien || [];
+  return `<div class="tile" style="margin-top:10px">
+    <div class="k">Ca mới đổi cho KH · ID khách hàng: ${esc(cm.id_khach_hang) || "—"}</div>
+    <div style="margin:4px 0"><b>${esc(CA_MOI_GAN[cm.trang_thai_gan] || cm.trang_thai_gan)}</b>${cm.ca_moi_id ? ` · ca <b>${esc(cm.ca_moi_id)}</b> (${esc(cm.ca_moi_tien_do || "—")})` : ""}</div>
+    ${uv.length ? `<table style="margin-top:6px"><thead><tr><th>Ca</th><th>Tiếp nhận</th><th>Sản phẩm</th><th>Tiến độ</th><th></th></tr></thead><tbody>
+      ${uv.map((u) => `<tr style="cursor:default"><td><b>${esc(u.id)}</b>${u.khop_model ? ' <span class="badge b-teal">khớp model</span>' : ""}</td><td>${fmt(u.tn_at)}</td>
+        <td style="white-space:normal">${esc(u.san_pham)}</td><td>${esc(u.tien_do)}</td>
+        <td>${u.id === cm.ca_moi_id ? "Đang chọn" : `<button class="btn" data-camoi="${esc(u.id)}">Chọn</button>`}</td></tr>`).join("")}
+      </tbody></table>` : `<div class="s">Chưa có ca nào cùng ID khách hàng mở trong 60 ngày sau khi duyệt.</div>`}
+    <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+      ${cm.trang_thai_gan !== "xac_nhan" || cm.ca_moi_id ? `<button class="btn" data-camoi="">Xác nhận không có ca mới</button>` : ""}
+      ${cm.trang_thai_gan === "xac_nhan" ? `<button class="btn" data-camoi="__bo__">Bỏ xác nhận (tự tìm lại)</button>` : ""}
+    </div>
+  </div>`;
 }
 
 function csv() {
