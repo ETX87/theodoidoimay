@@ -308,7 +308,7 @@ function csv() {
   const lines = [cols.join(","), ...rows().map((h) => cols.map((c) => `"${String(val(h, c)).replace(/"/g, '""')}"`).join(","))];
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" }));
-  a.download = `ho-so-doi-tra-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+  a.download = `ho-so-doi-tra-${new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)}.csv`; // ngay theo gio VN a.click();
 }
 
 function start() {

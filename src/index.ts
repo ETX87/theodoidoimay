@@ -108,6 +108,10 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
     if (!(await safeEqual(req.headers.get("X-Ingest-Key") ?? "", env.INGEST_KEY))) throw new HttpError(401, "Sai INGEST_KEY");
     return json(await dongBoTranhChap(env));
   }
+  if (p === "/api/admin/trich-dan-lai" && m === "POST") {
+    if (!(await safeEqual(req.headers.get("X-Ingest-Key") ?? "", env.INGEST_KEY))) throw new HttpError(401, "Sai INGEST_KEY");
+    return json(await trichDanLai(env));
+  }
   if (p === "/api/admin/tinh-lai" && m === "POST") {
     if (!(await safeEqual(req.headers.get("X-Ingest-Key") ?? "", env.INGEST_KEY))) throw new HttpError(401, "Sai INGEST_KEY");
     return json(await tinhLaiToanBo(env));
@@ -257,39 +261,13 @@ async function ingest(env: Env, payload: unknown) {
       moc: mocSauDuyet(from.email, bodyNew),
     };
 
-    // Thu that thay cho ban trich dan da luu truoc do (cung nguoi gui, lech <= 2 phut).
-    const quotedTwin = await timThuGan(env, from.email, msg.sentAt, "trich_dan");
+    // Thu that thay cho ban trich dan da luu truoc do (cung nguoi gui + tieu de, lech <= 2 phut).
+    const quotedTwin = await timThuGan(env, from.email, msg.sentAt, subject, "trich_dan");
     if (quotedTwin) await env.DB.prepare("DELETE FROM thu WHERE id = ?").bind(quotedTwin.id).run();
     await insertThu(env, values);
     if (quotedTwin && quotedTwin.luongId !== luongId) await gopLuong(env, quotedTwin.luongId, luongId);
 
-    // Chuoi thu cu nam trong phan trich dan -> biet ai mo luong, luc nao.
-    for (const q of tachTrichDan(body)) {
-      if (!q.from.email || (await timThuGan(env, q.from.email, q.sentAt))) continue;
-      const qTieuDe = phanTichTieuDe(q.subject);
-      const qBody = phanMoi(q.body);
-      await insertThu(env, {
-        ...values,
-        nguon: "trich_dan",
-        gmailId: `q_${await hash(`${q.from.email}|${q.sentAt.slice(0, 16)}|${qTieuDe.goc}`)}`,
-        messageId: "",
-        inReplyTo: "",
-        refs: "",
-        from: q.from,
-        to: q.to.slice(0, 4000),
-        cc: q.cc.slice(0, 4000),
-        subject: q.subject.slice(0, 1000),
-        sentAt: q.sentAt,
-        bodyNew: qBody.slice(0, 20_000),
-        r2Key: "",
-        attachments: "[]",
-        method: "trich_dan",
-        laDeXuat: laThuDeXuat(q.from.email, q.to, qTieuDe, qBody) ? 1 : 0,
-        laDuyet: laThuDuyet(q.from.email, qBody) ? 1 : 0,
-        moc: mocSauDuyet(q.from.email, qBody),
-      });
-      out.quoted++;
-    }
+    out.quoted += await luuTrichDan(env, body, values);
 
     await env.DB.prepare(
       `UPDATE luong SET
@@ -307,6 +285,66 @@ async function ingest(env: Env, payload: unknown) {
     out.results.push({ gmailId: msg.gmailId, luongId: finalId, method, maCase, serial });
   }
   return out;
+}
+
+/** Chuoi thu cu nam trong phan trich dan -> biet ai mo luong, luc nao. Tra ve so thu trich dan MOI da luu. */
+async function luuTrichDan(env: Env, body: string, values: ThuValues): Promise<number> {
+  let n = 0;
+  for (const q of tachTrichDan(body)) {
+    if (!q.from.email || (await timThuGan(env, q.from.email, q.sentAt, q.subject))) continue;
+    const qTieuDe = phanTichTieuDe(q.subject);
+    const qBody = phanMoi(q.body);
+    n += await insertThu(env, {
+      ...values,
+      nguon: "trich_dan",
+      gmailId: `q_${await hash(`${q.from.email}|${q.sentAt.slice(0, 16)}|${qTieuDe.goc}`)}`,
+      messageId: "",
+      inReplyTo: "",
+      refs: "",
+      from: q.from,
+      to: q.to.slice(0, 4000),
+      cc: q.cc.slice(0, 4000),
+      subject: q.subject.slice(0, 1000),
+      sentAt: q.sentAt,
+      bodyNew: qBody.slice(0, 20_000),
+      r2Key: "",
+      attachments: "[]",
+      method: "trich_dan",
+      laDeXuat: laThuDeXuat(q.from.email, q.to, qTieuDe, qBody) ? 1 : 0,
+      laDuyet: laThuDuyet(q.from.email, qBody) ? 1 : 0,
+      moc: mocSauDuyet(q.from.email, qBody),
+    });
+  }
+  return n;
+}
+
+/**
+ * Tach lai phan trich dan cua MOI thu that da luu (doc toan van tu R2) - bu cac thu trich dan bi bo sot (vd do quy
+ * tac chong trung cu chi so nguoi gui + thoi gian). Chi THEM thu con thieu, khong xoa gi; tinh lai moc cac luong co them.
+ */
+async function trichDanLai(env: Env) {
+  const rows = await env.DB.prepare(
+    `SELECT t.luong_id, t.gmail_id, t.thread_id, t.from_email, t.to_addr, t.subject, t.sent_at, t.r2_key
+     FROM thu t WHERE t.nguon = 'gmail' AND t.r2_key != ''`,
+  ).all<{ luong_id: number; gmail_id: string; thread_id: string; from_email: string; to_addr: string; subject: string; sent_at: string; r2_key: string }>();
+  let them = 0;
+  const luongCoThem = new Set<number>();
+  for (const t of rows.results) {
+    const obj = await env.THU.get(t.r2_key);
+    if (!obj) continue;
+    const goc = (await obj.json()) as { body?: string };
+    const n = await luuTrichDan(env, goc.body ?? "", {
+      luongId: t.luong_id, nguon: "trich_dan", gmailId: "", threadId: t.thread_id, messageId: "", inReplyTo: "", refs: "",
+      from: { name: "", email: t.from_email }, to: t.to_addr, cc: "", subject: t.subject, sentAt: t.sent_at, bodyNew: "",
+      r2Key: "", attachments: "[]", method: "trich_dan", laDeXuat: 0, laDuyet: 0, moc: "",
+    });
+    if (n) {
+      them += n;
+      luongCoThem.add(t.luong_id);
+    }
+  }
+  for (const id of luongCoThem) await tinhLaiMoc(env, id);
+  return { ok: true, thu_that: rows.results.length, trich_dan_them: them, luong_tinh_lai: [...luongCoThem] };
 }
 
 /**
@@ -373,20 +411,29 @@ async function timLuong(
   return { luongId: created!.id, method: "moi" };
 }
 
-/** Tim thu cung nguoi gui, lech <= 2 phut (de khong luu trung thu that va ban trich dan). */
+const chuanTieuDe = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+
+/**
+ * Tim CUNG 1 thu da luu (thu that <-> ban trich dan cua chinh no): cung nguoi gui, lech <= 2 phut (trich dan chi
+ * chinh xac den phut) VA cung tieu de. Phai so tieu de: 1 nguoi co the gui 2 thu khac nhau trong 2 phut (vd 13:48 gui
+ * de xuat, 13:50 FW lai) - truoc day thu thu 2 bi coi la trung va mat (ca SC261006460 mat thu de xuat).
+ */
 async function timThuGan(
   env: Env,
   email: string,
   sentAt: string,
+  subject: string,
   nguon?: string,
 ): Promise<{ id: number; luongId: number } | null> {
   const t = Date.parse(sentAt);
-  const row = await env.DB.prepare(
-    `SELECT id, luong_id AS luongId FROM thu WHERE from_email = ?1 AND sent_at BETWEEN ?2 AND ?3 ${nguon ? "AND nguon = ?4" : ""} LIMIT 1`,
+  const rows = await env.DB.prepare(
+    `SELECT id, luong_id AS luongId, subject FROM thu WHERE from_email = ?1 AND sent_at BETWEEN ?2 AND ?3 ${nguon ? "AND nguon = ?4" : ""}`,
   )
     .bind(email, new Date(t - LECH_TRICH_DAN_MS).toISOString(), new Date(t + LECH_TRICH_DAN_MS).toISOString(), ...(nguon ? [nguon] : []))
-    .first<{ id: number; luongId: number }>();
-  return row ?? null;
+    .all<{ id: number; luongId: number; subject: string }>();
+  const tieuDe = chuanTieuDe(subject);
+  const row = rows.results.find((r) => chuanTieuDe(r.subject) === tieuDe);
+  return row ? { id: row.id, luongId: row.luongId } : null;
 }
 
 interface ThuValues {
@@ -411,8 +458,9 @@ interface ThuValues {
   moc: string;
 }
 
-async function insertThu(env: Env, v: ThuValues): Promise<void> {
-  await env.DB.prepare(
+/** Tra ve 1 neu da luu, 0 neu trung gmail_id (INSERT OR IGNORE). */
+async function insertThu(env: Env, v: ThuValues): Promise<number> {
+  const r = await env.DB.prepare(
     `INSERT OR IGNORE INTO thu (luong_id, nguon, gmail_id, thread_id, message_id, in_reply_to, refs, from_name, from_email,
        to_addr, cc_addr, subject, sent_at, body_new, r2_key, attachments, link_method, la_de_xuat, la_duyet, moc)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)`,
@@ -420,6 +468,7 @@ async function insertThu(env: Env, v: ThuValues): Promise<void> {
     .bind(v.luongId, v.nguon, v.gmailId, v.threadId, v.messageId, v.inReplyTo, v.refs, v.from.name, v.from.email,
       v.to, v.cc, v.subject, v.sentAt, v.bodyNew, v.r2Key, v.attachments, v.method, v.laDeXuat, v.laDuyet, v.moc)
     .run();
+  return r.meta.changes ?? 0;
 }
 
 /**
