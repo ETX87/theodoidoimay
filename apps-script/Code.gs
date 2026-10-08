@@ -37,12 +37,17 @@ function kiemTraKetNoi() {
 
 function dongBoMail() {
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(1000)) return; // lần trước còn đang chạy
+  // Cho toi da 60 giay neu luot tu dong (5 phut/lan) dang chay do.
+  if (!lock.tryLock(60000)) {
+    Logger.log('Đang có lượt đồng bộ khác chạy, bỏ qua lượt này.');
+    return;
+  }
   try {
     const props = PropertiesService.getScriptProperties();
     const started = Date.now();
     let last = Number(props.getProperty('LAST_SYNC_MS') || 0);
     if (!last) last = started - CONFIG.LOOKBACK_DAYS_FIRST_RUN * 86400000;
+    Logger.log('Bắt đầu quét từ ' + new Date(last));
 
     while (last < Date.now() && Date.now() - started < CONFIG.MAX_RUN_MS) {
       const until = Math.min(Date.now(), last + CONFIG.WINDOW_HOURS * 3600000);
@@ -60,7 +65,9 @@ function dongBoMail() {
 /** Đặt lại mốc để lần chạy sau quét lại từ đầu (Worker vẫn tự bỏ trùng). */
 function quetLaiTuDau() {
   PropertiesService.getScriptProperties().deleteProperty('LAST_SYNC_MS');
+  Logger.log('Đã đặt lại mốc, quét lại ' + CONFIG.LOOKBACK_DAYS_FIRST_RUN + ' ngày gần nhất.');
   dongBoMail();
+  Logger.log('Xong. Mốc mới: ' + new Date(Number(PropertiesService.getScriptProperties().getProperty('LAST_SYNC_MS'))));
 }
 
 function quetCuaSo_(sinceMs, untilMs) {
@@ -125,6 +132,11 @@ function guiLen_(messages) {
   });
   if (res.getResponseCode() !== 200) {
     throw new Error('Worker trả lỗi ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 300));
+  }
+  if (messages.length) {
+    const r = JSON.parse(res.getContentText());
+    Logger.log('  Worker: mới ' + r.inserted + ', trùng ' + r.duplicates + ', loại ' + r.skipped +
+      ', thư trích dẫn ' + r.quoted + ', bổ sung HTML ' + (r.htmlBoSung || 0));
   }
   return res.getContentText();
 }

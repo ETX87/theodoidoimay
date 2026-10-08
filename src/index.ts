@@ -137,7 +137,7 @@ async function ingest(env: Env, payload: unknown) {
     .map((x) => ({ ...x, sentAt: toIso(x.date) }))
     .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
 
-  const out = { ok: true, inserted: 0, duplicates: 0, skipped: 0, quoted: 0, results: [] as unknown[] };
+  const out = { ok: true, inserted: 0, duplicates: 0, skipped: 0, quoted: 0, htmlBoSung: 0, results: [] as unknown[] };
 
   for (const msg of sorted) {
     const messageId = cleanId(msg.messageId ?? "");
@@ -149,6 +149,7 @@ async function ingest(env: Env, payload: unknown) {
       .first();
     if (dup) {
       out.duplicates++;
+      if (msg.html) await boSungHtml(env, msg, out);
       continue;
     }
 
@@ -252,6 +253,33 @@ async function ingest(env: Env, payload: unknown) {
     out.results.push({ gmailId: msg.gmailId, luongId: finalId, method, maCase, serial });
   }
   return out;
+}
+
+/**
+ * Thu da luu tu ban Apps Script cu (khong co HTML) duoc gui lai kem HTML -> bo sung toan van vao R2 va
+ * bang de xuat cho luong neu luong chua co. Khong xoa/them thu nao.
+ */
+async function boSungHtml(env: Env, msg: InMessage & { sentAt: string }, out: { htmlBoSung?: number }): Promise<void> {
+  const row = await env.DB.prepare(
+    `SELECT t.luong_id, t.r2_key, l.de_xuat_json FROM thu t JOIN luong l ON l.id = t.luong_id
+     WHERE t.gmail_id = ? AND t.nguon = 'gmail'`,
+  )
+    .bind(msg.gmailId)
+    .first<{ luong_id: number; r2_key: string; de_xuat_json: string }>();
+  if (!row?.r2_key) return;
+  const cu = await env.THU.get(row.r2_key);
+  const daCoHtml = cu ? Boolean(((await cu.json()) as { html?: string }).html) : false;
+  if (daCoHtml) return;
+  await env.THU.put(
+    row.r2_key,
+    JSON.stringify({ subject: msg.subject, from: msg.from, to: msg.to, cc: msg.cc, body: msg.body ?? "", html: msg.html }),
+    { httpMetadata: { contentType: "application/json; charset=utf-8" } },
+  );
+  const bang = bangDeXuat(msg.html ?? "");
+  if (row.de_xuat_json === "{}" && Object.keys(bang).length) {
+    await env.DB.prepare("UPDATE luong SET de_xuat_json = ? WHERE id = ?").bind(JSON.stringify(bang), row.luong_id).run();
+  }
+  out.htmlBoSung = (out.htmlBoSung ?? 0) + 1;
 }
 
 async function timLuong(
