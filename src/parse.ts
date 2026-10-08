@@ -223,14 +223,15 @@ export function laThuDuyet(fromEmail: string, bodyNew: string): boolean {
  * Thu de xuat: thu moi (khong RE/FW) co "HỖ TRỢ ..." trong tieu de, ben ngoai 3T gui TOI 3T.
  * (Thu sieu thi bao hang loi gui Karofi = diem phat sinh, khong phai de xuat.)
  */
-export function laThuDeXuat(fromEmail: string, toAddr: string, tieuDe: SubjectInfo): boolean {
-  return (
-    !tieuDe.coTienTo &&
-    tieuDe.loai !== "" &&
-    domainOf(fromEmail) !== BEN_DUYET &&
-    tatCaEmail(toAddr).some((e) => domainOf(e) === BEN_DUYET)
-  );
+export function laThuDeXuat(fromEmail: string, toAddr: string, tieuDe: SubjectInfo, bodyNew = ""): boolean {
+  if (domainOf(fromEmail) === BEN_DUYET || !tatCaEmail(toAddr).some((e) => domainOf(e) === BEN_DUYET)) return false;
+  // Dang 1: thu moi "HỖ TRỢ ĐỔI MÁY: ..._<ma case>".
+  if (!tieuDe.coTienTo && tieuDe.loai !== "") return true;
+  // Dang 2: de xuat ngay trong luong cu (RE: luong sieu thi...) - "Dear Anh Trường hỗ trợ phê duyệt".
+  return XIN_DUYET_RE.test(boDau(bodyNew.slice(0, 800)));
 }
+
+const XIN_DUYET_RE = /\b(ho\s+tro|xin|de\s+nghi|nho)\s+(\S+\s+){0,3}(phe\s+duyet|duyet)\b|\bxem\s+xet\s+yeu\s+cau\s+doi\b/;
 
 // ---------------------------------------------------------------- moc sau duyet (noi bo Karofi)
 

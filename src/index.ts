@@ -205,7 +205,7 @@ async function ingest(env: Env, payload: unknown) {
       r2Key,
       attachments: JSON.stringify((msg.attachments ?? []).slice(0, 50)),
       method,
-      laDeXuat: laThuDeXuat(from.email, msg.to ?? "", tieuDe) ? 1 : 0,
+      laDeXuat: laThuDeXuat(from.email, msg.to ?? "", tieuDe, bodyNew) ? 1 : 0,
       laDuyet: laThuDuyet(from.email, bodyNew) ? 1 : 0,
       moc: mocSauDuyet(from.email, bodyNew),
     };
@@ -237,7 +237,7 @@ async function ingest(env: Env, payload: unknown) {
         r2Key: "",
         attachments: "[]",
         method: "trich_dan",
-        laDeXuat: laThuDeXuat(q.from.email, q.to, qTieuDe) ? 1 : 0,
+        laDeXuat: laThuDeXuat(q.from.email, q.to, qTieuDe, qBody) ? 1 : 0,
         laDuyet: laThuDuyet(q.from.email, qBody) ? 1 : 0,
         moc: mocSauDuyet(q.from.email, qBody),
       });
@@ -518,7 +518,7 @@ async function tinhLaiToanBo(env: Env) {
   const stmts = rows.results.map((t) =>
     env.DB.prepare("UPDATE thu SET la_de_xuat = ?2, la_duyet = ?3, moc = ?4 WHERE id = ?1").bind(
       t.id,
-      laThuDeXuat(t.from_email, t.to_addr, phanTichTieuDe(t.subject)) ? 1 : 0,
+      laThuDeXuat(t.from_email, t.to_addr, phanTichTieuDe(t.subject), t.body_new) ? 1 : 0,
       laThuDuyet(t.from_email, t.body_new) ? 1 : 0,
       mocSauDuyet(t.from_email, t.body_new),
     ),

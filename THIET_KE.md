@@ -57,6 +57,7 @@ Tra DVBH: theo `id`, nếu không có thì theo `seri_san_pham` (so cả chữ h
 | Mốc | Quy tắc hiện tại (sẽ tinh chỉnh khi có thêm mail thật) |
 |---|---|
 | Đề xuất đổi | Thư có tiêu đề bắt đầu `HỖ TRỢ …` không có tiền tố RE/FW, hoặc chứa bảng có cột "Mã Yêu Cầu" |
+| Đề xuất dạng 2 | Thư ngoài 3T gửi tới 3T, đề xuất ngay trong luồng cũ (RE: luồng siêu thị): nội dung có "hỗ trợ/xin/nhờ… phê duyệt" hoặc "xem xét yêu cầu đổi" |
 | Đề xuất (bổ sung) | Người gửi ngoài 3T và **người nhận (To) có @dichvu3t.com** — thư siêu thị báo hàng lỗi gửi Karofi là *điểm phát sinh*, không phải đề xuất |
 | Duyệt | Thư của `@dichvu3t.com` sau thư đề xuất, nội dung mới (đã bỏ dấu) có "đồng ý / đã duyệt", không có "không/chưa đồng ý", không phải câu nhờ/xin duyệt |
 
