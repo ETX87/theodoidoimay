@@ -1,3 +1,4 @@
+import { baoCao, chiTietHoSo, dongBoTranhChap } from "./baoCao";
 import { caseTheoId, caseTheoSerial, type DvbhCase } from "./dvbh";
 import {
   bangDeXuat,
@@ -19,6 +20,7 @@ export interface Env {
   THU: R2Bucket; // toan van thu
   ASSETS: Fetcher;
   ALLOWED_DOMAINS: string; // "dichvu3t.com,karofi.vn"
+  THEO_DOI_TU: string; // ngay bat dau theo doi mail (doi soat "co yeu cau doi nhung chua co mail" chi tinh tu ngay nay)
   APP_PASSWORD: string;
   PARTNER_API_KEY: string; // DVBH goi GET /api/partner/case (Service Binding)
   INGEST_KEY: string;
@@ -45,8 +47,13 @@ export default {
     }
   },
 
-  // Doi soat dem: gan lai luong chua gan (DVBH import tre), don bo_qua qua han.
-  async scheduled(_c: ScheduledController, env: Env): Promise<void> {
+  // "0 */3 * * *": dong bo ho so tranh chap doi may tu DVBH.
+  // "0 19 * * *" (02:00 VN): gan lai luong chua gan (DVBH import tre), don bo_qua qua han.
+  async scheduled(c: ScheduledController, env: Env): Promise<void> {
+    if (c.cron === "0 */3 * * *") {
+      await dongBoTranhChap(env);
+      return;
+    }
     const pending = await env.DB.prepare(
       "SELECT id FROM luong WHERE match_status != 'da_gan' ORDER BY last_at DESC LIMIT 200",
     ).all<{ id: number }>();
@@ -75,6 +82,10 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
     if (!(await safeEqual(req.headers.get("X-API-Key") ?? "", env.PARTNER_API_KEY))) throw new HttpError(401, "Sai API key");
     return json(await luongChoDvbh(env, (url.searchParams.get("id") ?? "").trim().toUpperCase()));
   }
+  if (p === "/api/admin/dong-bo" && m === "POST") {
+    if (!(await safeEqual(req.headers.get("X-Ingest-Key") ?? "", env.INGEST_KEY))) throw new HttpError(401, "Sai INGEST_KEY");
+    return json(await dongBoTranhChap(env));
+  }
   if (p === "/api/admin/tinh-lai" && m === "POST") {
     if (!(await safeEqual(req.headers.get("X-Ingest-Key") ?? "", env.INGEST_KEY))) throw new HttpError(401, "Sai INGEST_KEY");
     return json(await tinhLaiToanBo(env));
@@ -87,6 +98,10 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   if (!(await checkSession(req, env))) throw new HttpError(401, "Chưa đăng nhập");
 
   if (p === "/api/me" && m === "GET") return json({ ok: true });
+  if (p === "/api/bao-cao" && m === "GET") return json(await baoCao(env, url.searchParams));
+  if (p === "/api/bao-cao/dong-bo" && m === "POST") return json(await dongBoTranhChap(env));
+  const hoSo = p.match(/^\/api\/bao-cao\/ho-so\/([A-Za-z0-9]+)$/);
+  if (hoSo && m === "GET") return json(await chiTietHoSo(env, hoSo[1].toUpperCase()));
   if (p === "/api/stats" && m === "GET") return json(await stats(env));
   if (p === "/api/luong" && m === "GET") return json(await listLuong(env, url.searchParams));
   if (p === "/api/bo-qua" && m === "GET") {

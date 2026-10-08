@@ -28,10 +28,13 @@
   ],
   // Toan van text + HTML tung thu (D1 chi giu phan noi dung moi).
   "r2_buckets": [{ "binding": "THU", "bucket_name": "theodoidoimay-thu" }],
-  // 02:00 gio VN: gan lai luong chua gan case DVBH, xoa bo_qua qua 90 ngay.
-  "triggers": { "crons": ["0 19 * * *"] },
+  // "0 */3 * * *": dong bo ho so Tranh chap doi may tu DVBH (src/baoCao.ts).
+  // "0 19 * * *" = 02:00 gio VN: gan lai luong chua gan case DVBH, xoa bo_qua qua 90 ngay.
+  "triggers": { "crons": ["0 */3 * * *", "0 19 * * *"] },
   "vars": {
-    "ALLOWED_DOMAINS": "dichvu3t.com,karofi.vn"
+    "ALLOWED_DOMAINS": "dichvu3t.com,karofi.vn",
+    // Ngay bat dau CC mail theo doi - doi soat "co yeu cau doi may nhung chua co mail" chi tinh tu ngay nay.
+    "THEO_DOI_TU": "2026-10-08"
   }
   // Secrets (wrangler secret put): APP_PASSWORD (dang nhap web), INGEST_KEY (Apps Script gui mail len).
 }

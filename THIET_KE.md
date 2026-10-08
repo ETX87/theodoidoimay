@@ -110,4 +110,13 @@ danh sách đối soát (có khiếu nại đổi máy nhưng không có mail, c
 2. ✅ Lọc tên miền + lưu 3 lớp + R2 + tách thư trích dẫn + nhận diện mã case/serial + tra DVBH + mốc đề xuất/duyệt.
 3. ✅ Cron đối soát đêm 02:00 (gắn lại, dọn `bo_qua`) — đã có khung, sẽ mở rộng khi nối Khiếu nại.
 4. ✅ DVBH v1.431 (2026-10-08): cột `id_khach_hang` (migration 0127) + tab "Luồng mail" (Service Binding `THEODOI_APP` → `GET /api/partner/case`, secret `THEODOI_APP_API_KEY` = `PARTNER_API_KEY` của theodoidoimay). Pipeline QuickSight: xem `YEU_CAU_PIPELINE_ID_KHACH_HANG.md`.
-5. Nối Khiếu nại + hồ sơ đổi trả 7 mốc + báo cáo.
+5. ✅ Báo cáo vòng đời đổi trả (trang web theodoidoimay, đăng nhập APP_PASSWORD):
+   - Phát hiện 2026-10-08: app Khiếu nại (`tiepnhan`) gần như không dùng nhánh đổi máy (1/889 bản ghi) và 9 case đổi máy
+     theo dõi qua mail không có khiếu nại nào → **nguồn nửa đầu vòng đời là module "Tranh chấp, khiếu nại" của DVBH**
+     (`tranh_chap_tien_trinh` phân loại "KH đòi đổi máy"/"Đổi trả" + `tranh_chap_log`): 7/9 case có hồ sơ ở đây.
+   - Đồng bộ 3 giờ/lần (cron `0 */3 * * *`) về bảng `tc_doi_may` (đọc lại toàn bộ ~3,5k dòng/lần ≈ 28k rows_read/ngày).
+   - Hồ sơ = ghép theo mã case: Yêu cầu đổi (DVBH) → CSKH xử lý → [mail] tiếp nhận → đề xuất → duyệt → giao xử lý → SO → DO
+     → đóng hồ sơ (DVBH). Thời gian trung bình từng bước; tab đối soát: có yêu cầu đổi chưa có mail (từ `THEO_DOI_TU`),
+     có mail chưa có hồ sơ DVBH, đã duyệt mà DVBH chưa cập nhật, kẹt > 3 ngày, luồng chưa gắn case. Xuất CSV.
+   - App Khiếu nại: chưa nối (chưa có dữ liệu đổi máy để nối); thêm khi nhánh đổi máy bên đó được dùng.
+6. Ca mới đổi cho KH (mốc "đổi trả thành công" theo ca mới): chờ pipeline QuickSight gửi `id_khach_hang`.

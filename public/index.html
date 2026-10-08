@@ -1,2 +1,300 @@
-<!doctype html><html lang="vi"><meta charset="utf-8"><title>Thư ký mail đổi máy</title>
-<body style="font-family:sans-serif;padding:2rem"><h1>Thư ký mail đổi máy</h1><p>Đang thu thập mail. Giao diện báo cáo sẽ nằm trong app DVBH.</p></body></html>
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Theo dõi đổi trả</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #fff; --line: #e3e6eb;
+    --ink-900: #14181f; --ink-600: #4a5260; --ink-400: #7c8494;
+    --accent: #1f6feb;
+    /* trang thai: luon kem chu, khong dung mau don thuan */
+    --s-gray: #eef0f3; --s-gray-t: #4a5260;
+    --s-blue: #e3edfd; --s-blue-t: #1b4fa8;
+    --s-amber: #fdf1dc; --s-amber-t: #8a5a00;
+    --s-teal: #dcf3ee; --s-teal-t: #0d6b58;
+    --s-violet: #ece6fb; --s-violet-t: #5b3aa6;
+    --s-green: #e0f2e3; --s-green-t: #1e6b30;
+    --s-red: #fbe4e2; --s-red-t: #a1261c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--ink-900); }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 14px 20px; background: var(--surface); border-bottom: 1px solid var(--line); }
+  h1 { font-size: 17px; margin: 0; }
+  .muted { color: var(--ink-400); font-size: 12px; }
+  main { padding: 16px 20px 40px; max-width: 1500px; margin: 0 auto; }
+  button, select, input { font: inherit; }
+  .btn { border: 1px solid var(--line); background: var(--surface); padding: 6px 12px; border-radius: 8px; cursor: pointer; color: var(--ink-900); }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin-bottom: 14px; }
+  .filters label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--ink-600); }
+  .filters input, .filters select { border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; background: var(--surface); min-width: 130px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); gap: 10px; margin-bottom: 10px; }
+  .tile { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .tile .k { font-size: 12px; color: var(--ink-600); }
+  .tile .v { font-size: 24px; font-weight: 650; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .tile .s { font-size: 11px; color: var(--ink-400); }
+  .section-title { font-size: 12px; font-weight: 600; color: var(--ink-600); margin: 14px 0 6px; text-transform: uppercase; letter-spacing: .03em; }
+  .tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin: 16px 0 0; }
+  .tab { border: 0; background: none; padding: 8px 12px; cursor: pointer; color: var(--ink-600); border-bottom: 2px solid transparent; }
+  .tab.on { color: var(--ink-900); border-bottom-color: var(--accent); font-weight: 600; }
+  .tab .n { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 9px; background: var(--s-gray); font-size: 11px; color: var(--ink-600); }
+  .hint { font-size: 12px; color: var(--ink-600); padding: 8px 0; }
+  .tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-top: 0; border-radius: 0 0 10px 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { padding: 7px 9px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  th { font-size: 11.5px; color: var(--ink-600); font-weight: 600; background: #fafbfc; position: sticky; top: 0; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #f3f7fe; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; }
+  .b-gray { background: var(--s-gray); color: var(--s-gray-t); } .b-blue { background: var(--s-blue); color: var(--s-blue-t); }
+  .b-amber { background: var(--s-amber); color: var(--s-amber-t); } .b-teal { background: var(--s-teal); color: var(--s-teal-t); }
+  .b-violet { background: var(--s-violet); color: var(--s-violet-t); } .b-green { background: var(--s-green); color: var(--s-green-t); }
+  .b-red { background: var(--s-red); color: var(--s-red-t); }
+  .empty { padding: 24px; text-align: center; color: var(--ink-400); }
+  #login { max-width: 340px; margin: 12vh auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 24px; }
+  #login input { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; margin: 10px 0; }
+  .err { color: var(--s-red-t); font-size: 13px; min-height: 18px; }
+  #drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100vw); background: var(--surface); border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0,0,0,.08); overflow-y: auto; padding: 18px; display: none; }
+  #drawer.on { display: block; }
+  .tl { list-style: none; padding: 0; margin: 10px 0 0; }
+  .tl li { position: relative; padding: 0 0 14px 18px; border-left: 2px solid var(--line); margin-left: 5px; }
+  .tl li::before { content: ""; position: absolute; left: -6px; top: 4px; width: 10px; height: 10px; border-radius: 50%; background: var(--surface); border: 2px solid var(--ink-400); }
+  .tl .t { font-size: 12px; color: var(--ink-400); }
+  .tl .b { white-space: pre-line; color: var(--ink-600); font-size: 13px; margin-top: 2px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div id="login" class="hidden">
+  <h1>Theo dõi đổi trả</h1>
+  <div class="muted">Đăng nhập để xem báo cáo</div>
+  <input id="pw" type="password" placeholder="Mật khẩu" autocomplete="current-password">
+  <div class="err" id="loginErr"></div>
+  <button class="btn primary" id="loginBtn" style="width:100%">Đăng nhập</button>
+</div>
+
+<div id="app" class="hidden">
+  <header>
+    <div>
+      <h1>Báo cáo vòng đời đổi trả</h1>
+      <div class="muted" id="syncInfo"></div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn" id="syncBtn">Đồng bộ DVBH ngay</button>
+      <button class="btn" id="csvBtn">Xuất CSV</button>
+      <button class="btn" id="logoutBtn">Đăng xuất</button>
+    </div>
+  </header>
+  <main>
+    <div class="filters">
+      <label>Phát sinh từ<input type="date" id="fTu"></label>
+      <label>đến<input type="date" id="fDen"></label>
+      <label>Hãng<select id="fHang"><option value="">Tất cả</option></select></label>
+      <label>Khu vực<select id="fKhuVuc"><option value="">Tất cả</option></select></label>
+      <label>Nguồn<select id="fNguon">
+        <option value="">Tất cả</option><option value="ca_hai">Tranh chấp + mail</option>
+        <option value="tranh_chap">Chỉ tranh chấp DVBH</option><option value="mail">Chỉ mail</option>
+      </select></label>
+      <label>Trạng thái<select id="fTrangThai"><option value="">Tất cả</option></select></label>
+      <button class="btn primary" id="applyBtn">Xem</button>
+    </div>
+
+    <div class="tiles" id="countTiles"></div>
+    <div class="section-title">Thời gian trung bình từng bước</div>
+    <div class="tiles" id="timeTiles"></div>
+
+    <div class="tabs" id="tabs"></div>
+    <div class="hint" id="tabHint"></div>
+    <div class="tablewrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+  </main>
+</div>
+
+<aside id="drawer"></aside>
+
+<script>
+const TRANG_THAI = {
+  moi_phat_sinh: ["Mới phát sinh", "gray"], cskh_xu_ly: ["CSKH đang xử lý", "blue"], cho_duyet: ["Chờ duyệt đổi", "amber"],
+  da_duyet: ["Đã duyệt đổi", "teal"], giao_xu_ly: ["Karofi giao xử lý", "violet"], da_len_so: ["Đã lên SO", "violet"],
+  da_len_do: ["Đã lên DO", "green"], dong_hoan_thanh: ["Đóng (không có mail)", "gray"], dong_that_bai: ["Đóng thất bại", "red"],
+};
+// Trang thai nhat ky Tranh chap DVBH (luu khong dau) -> nhan hien thi.
+const TC_TRANG_THAI = {
+  "Giam sat chua xu ly": "Giám sát chưa xử lý", "Giam sat dang xu ly": "Giám sát đang xử lý",
+  "Giam sat dong hoan thanh": "Giám sát đóng – hoàn thành", "Giam sat dong that bai": "Giám sát đóng – thất bại",
+  "Giam sat chuyen CSKH": "Giám sát chuyển CSKH", "CSKH chua tiep nhan": "CSKH chưa tiếp nhận",
+  "CSKH dang xu ly": "CSKH đang xử lý", "CSKH khong can xu ly": "CSKH không cần xử lý", "CSKH xu ly xong": "CSKH xử lý xong",
+};
+const tcNhan = (s) => TC_TRANG_THAI[s] || s || "—";
+/** Bo bang de xuat dang chu (da hien rieng) va chu ky mail cho gon. */
+const gonThu = (s) => {
+  let t = String(s || "");
+  const bang = t.search(/\n\s*Ngày TN\/GS đề xuất/);
+  if (bang > 0) t = t.slice(0, bang).trimEnd() + "\n[Bảng đề xuất đổi – xem tab Luồng mail trên DVBH]";
+  const ky = t.search(/\n\s*(Tks|Thanks|Trân trọng|Best regards|Em cảm ơn)[^\n]*/i);
+  if (ky > 0) t = t.slice(0, ky).trimEnd();
+  return t.replace(/\n{3,}/g, "\n\n").trim();
+};
+const NGUON = { ca_hai: "Tranh chấp + mail", tranh_chap: "Chỉ tranh chấp", mail: "Chỉ mail" };
+const BUOC = [
+  ["yc_den_de_xuat", "Yêu cầu đổi → Đề xuất"], ["de_xuat_den_duyet", "Đề xuất → Duyệt"], ["duyet_den_giao", "Duyệt → Giao xử lý"],
+  ["giao_den_so", "Giao xử lý → Lên SO"], ["so_den_do", "Lên SO → Lên DO"], ["yc_den_ket_thuc", "Yêu cầu → Đóng hồ sơ"],
+];
+const TABS = [
+  ["", "Tất cả hồ sơ", "Mỗi hồ sơ = 1 case DVBH có yêu cầu đổi máy (module Tranh chấp, khiếu nại) và/hoặc có luồng mail đổi trả."],
+  ["tc_chua_mail", "Có yêu cầu đổi, chưa có mail", "Hồ sơ \"KH đòi đổi máy\" đang mở trên DVBH (tạo từ ngày bắt đầu theo dõi mail) nhưng chưa thấy luồng mail nào → kiểm tra đã trình mail và CC theodoidoimay chưa."],
+  ["mail_chua_tc", "Có mail đề xuất, chưa có hồ sơ DVBH", "Đã có mail đề xuất đổi nhưng DVBH chưa tạo hồ sơ Tranh chấp, khiếu nại cho case."],
+  ["duyet_tc_chua_cap_nhat", "Đã duyệt, hồ sơ DVBH chưa cập nhật", "TBP đã duyệt qua mail nhưng nhật ký hồ sơ DVBH chưa có cập nhật nào sau thời điểm duyệt."],
+  ["ket", "Kẹt > 3 ngày", "Hồ sơ đang mở, không có hoạt động (mail hoặc nhật ký DVBH) quá 3 ngày."],
+  ["luong_chua_gan", "Luồng mail chưa gắn case", "Luồng mail đúng tên miền nhưng chưa xác định được case DVBH (không có mã case/serial khớp)."],
+];
+
+let data = null, tab = "";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const fmt = (iso) => iso ? new Intl.DateTimeFormat("vi-VN", { timeZone: "Asia/Ho_Chi_Minh", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(iso)) : "";
+const fmtFull = (iso) => iso ? new Intl.DateTimeFormat("vi-VN", { timeZone: "Asia/Ho_Chi_Minh", dateStyle: "short", timeStyle: "short" }).format(new Date(iso)) : "—";
+const gio = (h) => h == null ? "—" : h < 1 ? `${Math.round(h * 60)} phút` : h < 24 ? `${Math.round(h)} giờ` : `${(h / 24).toFixed(1).replace(".", ",")} ngày`;
+const badge = (s) => { const [t, c] = TRANG_THAI[s] || [s, "gray"]; return `<span class="badge b-${c}">${esc(t)}</span>`; };
+
+async function api(path, opt = {}) {
+  const r = await fetch("/api" + path, { credentials: "same-origin", headers: { "Content-Type": "application/json" }, ...opt });
+  if (r.status === 401) { showLogin(); throw new Error("401"); }
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.status);
+  return j;
+}
+
+function showLogin() { $("app").classList.add("hidden"); $("login").classList.remove("hidden"); $("pw").focus(); }
+async function login() {
+  $("loginErr").textContent = "";
+  const r = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: $("pw").value }) });
+  if (!r.ok) { $("loginErr").textContent = "Sai mật khẩu"; return; }
+  $("login").classList.add("hidden"); start();
+}
+
+function params() {
+  const p = new URLSearchParams();
+  for (const [id, k] of [["fTu", "tu"], ["fDen", "den"], ["fHang", "hang"], ["fKhuVuc", "khu_vuc"], ["fNguon", "nguon"], ["fTrangThai", "trang_thai"]]) if ($(id).value) p.set(k, $(id).value);
+  return p;
+}
+
+async function load() {
+  data = await api("/bao-cao?" + params());
+  const db = data.dong_bo;
+  $("syncInfo").textContent = db ? `Đồng bộ DVBH lúc ${fmtFull(db.lan_cuoi)} · theo dõi mail từ ${data.theo_doi_tu.split("-").reverse().join("/")}` : "Chưa đồng bộ DVBH lần nào";
+  fillSelect("fHang", data.lua_chon.hang); fillSelect("fKhuVuc", data.lua_chon.khu_vuc);
+  renderTiles(); renderTabs(); renderTable();
+}
+
+function fillSelect(id, values) {
+  const sel = $(id), cur = sel.value;
+  sel.innerHTML = `<option value="">Tất cả</option>` + values.map((v) => `<option ${v === cur ? "selected" : ""}>${esc(v)}</option>`).join("");
+}
+
+function renderTiles() {
+  const t = data.theo_trang_thai, ds = data.doi_soat;
+  const tiles = [
+    ["Tổng hồ sơ", data.tong, `${data.theo_nguon.ca_hai} có cả tranh chấp + mail`],
+    ["CSKH đang xử lý", t.cskh_xu_ly + t.moi_phat_sinh, "chưa trình mail đề xuất"],
+    ["Chờ duyệt đổi", t.cho_duyet, "đã gửi mail đề xuất"],
+    ["Đã duyệt, đang đổi", t.da_duyet + t.giao_xu_ly + t.da_len_so, "duyệt → lên SO"],
+    ["Đã lên DO", t.da_len_do, "đã xuất giao máy"],
+    ["Đóng thất bại", t.dong_that_bai, "theo nhật ký DVBH"],
+    ["Kẹt > 3 ngày", ds.ket, "đang mở, không hoạt động"],
+  ];
+  $("countTiles").innerHTML = tiles.map(([k, v, s]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join("");
+  $("timeTiles").innerHTML = BUOC.map(([k, label]) => { const x = data.thoi_gian[k]; return `<div class="tile"><div class="k">${label}</div><div class="v">${gio(x.tb_gio)}</div><div class="s">${x.n} hồ sơ có đủ 2 mốc</div></div>`; }).join("");
+}
+
+function renderTabs() {
+  $("tabs").innerHTML = TABS.map(([k, label]) => {
+    const n = k === "" ? data.tong : data.doi_soat[k];
+    return `<button class="tab ${k === tab ? "on" : ""}" data-k="${k}">${label}<span class="n">${n}</span></button>`;
+  }).join("");
+  $("tabHint").textContent = TABS.find((x) => x[0] === tab)[2];
+  for (const b of $("tabs").querySelectorAll(".tab")) b.onclick = () => { tab = b.dataset.k; renderTabs(); renderTable(); };
+}
+
+function rows() { return tab === "" ? data.ho_so : data.ho_so.filter((h) => h.doi_soat.includes(tab)); }
+
+function renderTable() {
+  if (tab === "luong_chua_gan") {
+    $("thead").innerHTML = "<tr><th>Luồng</th><th>Tình trạng</th><th>Tiêu đề</th><th>Người mở</th><th>Hoạt động cuối</th></tr>";
+    const r = data.luong_chua_gan;
+    $("tbody").innerHTML = r.length ? r.map((l) => `<tr><td>#${l.id}</td><td>${esc(l.match_status)}</td><td>${esc(l.subject).slice(0, 90)}</td><td>${esc(l.origin_email)}</td><td>${fmt(l.last_at)}</td></tr>`).join("") : `<tr><td colspan="5" class="empty">Không có</td></tr>`;
+    return;
+  }
+  $("thead").innerHTML = `<tr><th>Mã case</th><th>Hãng</th><th>Khu vực</th><th>Nguồn</th><th>Trạng thái</th><th>Yêu cầu đổi</th>
+    <th>Đề xuất</th><th>Duyệt</th><th>Giao XL</th><th>Lên SO</th><th>Lên DO</th><th>Đóng hồ sơ</th><th>Không HĐ</th></tr>`;
+  const r = rows();
+  $("tbody").innerHTML = r.length ? r.map((h) => `<tr data-c="${esc(h.case_id)}">
+      <td><b>${esc(h.case_id)}</b></td><td>${esc(h.hang)}</td><td>${esc(h.khu_vuc.replace(/^\(.*?\)\s*/, ""))}</td>
+      <td>${NGUON[h.nguon]}</td><td>${badge(h.trang_thai)}</td><td>${fmt(h.yc_at || h.mail_goc_at)}</td>
+      <td>${fmt(h.de_xuat_at)}</td><td>${fmt(h.duyet_at)}</td><td>${fmt(h.giao_xu_ly_at)}</td><td>${fmt(h.len_so_at)}</td>
+      <td>${fmt(h.len_do_at)}</td><td>${fmt(h.ket_thuc_at)}</td><td class="num">${h.ngay_khong_hoat_dong ?? ""}${h.ngay_khong_hoat_dong != null ? " ngày" : ""}</td></tr>`).join("")
+    : `<tr><td colspan="13" class="empty">Không có hồ sơ</td></tr>`;
+  for (const tr of $("tbody").querySelectorAll("tr[data-c]")) tr.onclick = () => openDrawer(tr.dataset.c);
+}
+
+async function openDrawer(caseId) {
+  const h = data.ho_so.find((x) => x.case_id === caseId);
+  $("drawer").classList.add("on");
+  $("drawer").innerHTML = `<div class="muted">Đang tải…</div>`;
+  const d = await api("/bao-cao/ho-so/" + encodeURIComponent(caseId));
+  const ev = [];
+  for (const t of d.tranh_chap) {
+    ev.push({ at: t.yc_at, nguon: `DVBH ${t.tien_trinh_id}`, tieu_de: `Tạo hồ sơ: ${t.phan_loai}`, noi_dung: "" });
+    for (const l of t.logs) ev.push({ at: l.at, nguon: `DVBH ${t.tien_trinh_id}`, tieu_de: tcNhan(l.trang_thai) + (l.ket_qua ? ` · ${l.ket_qua}` : ""), noi_dung: l.ghi_chu || "", ai: l.nguoi });
+  }
+  const MOC = { tiep_nhan: "Karofi tiếp nhận", giao_xu_ly: "Giao xử lý", len_so: "Lên SO", len_do: "Lên DO", len_so_do: "Lên SO + DO" };
+  for (const t of d.thu) {
+    const nhan = [t.la_de_xuat ? "Đề xuất đổi" : "", t.la_duyet ? "Duyệt" : "", MOC[t.moc] || ""].filter(Boolean).join(", ");
+    ev.push({ at: t.sent_at, nguon: "Mail", tieu_de: (nhan ? `[${nhan}] ` : "") + (t.from_name || t.from_email), noi_dung: gonThu(t.body_new), link: t.nguon === "gmail" ? `https://mail.google.com/mail/u/?authuser=theodoidoimay@gmail.com#all/${t.gmail_id}` : null });
+  }
+  ev.sort((a, b) => (a.at || "").localeCompare(b.at || ""));
+  $("drawer").innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <h1>Case ${esc(caseId)}</h1><button class="btn" id="closeDrawer">Đóng</button>
+    </div>
+    <div style="margin:6px 0">${badge(h.trang_thai)} <span class="muted">${esc(h.hang)} · ${esc(h.tinh)} · ${esc(h.san_pham)}</span></div>
+    <div class="muted">KTV: ${esc(h.ky_thuat_vien) || "—"} · Phân loại DVBH: ${esc(h.phan_loai) || "—"} · Trạng thái DVBH: ${esc(tcNhan(h.tc_trang_thai))}</div>
+    <ul class="tl">${ev.map((e) => `<li><div class="t">${fmtFull(e.at)} · ${esc(e.nguon)}${e.ai ? " · " + esc(e.ai) : ""}</div>
+      <div><b>${esc(e.tieu_de)}</b>${e.link ? ` · <a href="${e.link}" target="_blank" rel="noreferrer">Gmail</a>` : ""}</div>
+      ${e.noi_dung ? `<div class="b">${esc(e.noi_dung.length > 600 ? e.noi_dung.slice(0, 600) + "…" : e.noi_dung)}</div>` : ""}</li>`).join("")}</ul>`;
+  $("closeDrawer").onclick = () => $("drawer").classList.remove("on");
+}
+
+function csv() {
+  const cols = ["case_id", "hang", "khu_vuc", "tinh", "ky_thuat_vien", "nguon", "trang_thai", "phan_loai", "tc_trang_thai", "yc_at", "cskh_at",
+    "mail_goc_at", "tiep_nhan_at", "de_xuat_at", "duyet_at", "giao_xu_ly_at", "len_so_at", "len_do_at", "ket_thuc_at", "ngay_khong_hoat_dong", "doi_soat"];
+  const val = (h, c) => c.endsWith("_at") ? fmtFull(h[c]).replace("—", "") : c === "trang_thai" ? (TRANG_THAI[h[c]] || [h[c]])[0] : c === "doi_soat" ? h[c].join(" ") : h[c] ?? "";
+  const lines = [cols.join(","), ...rows().map((h) => cols.map((c) => `"${String(val(h, c)).replace(/"/g, '""')}"`).join(","))];
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" }));
+  a.download = `ho-so-doi-tra-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+}
+
+function start() {
+  $("app").classList.remove("hidden");
+  $("fTrangThai").innerHTML = `<option value="">Tất cả</option>` + Object.entries(TRANG_THAI).map(([k, [t]]) => `<option value="${k}">${t}</option>`).join("");
+  if (!$("fTu").value) $("fTu").value = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  load().catch(() => {});
+}
+
+$("loginBtn").onclick = login;
+$("pw").onkeydown = (e) => { if (e.key === "Enter") login(); };
+$("applyBtn").onclick = () => load();
+$("csvBtn").onclick = csv;
+$("syncBtn").onclick = async () => { $("syncBtn").disabled = true; $("syncBtn").textContent = "Đang đồng bộ…"; try { await api("/bao-cao/dong-bo", { method: "POST" }); await load(); } finally { $("syncBtn").disabled = false; $("syncBtn").textContent = "Đồng bộ DVBH ngay"; } };
+$("logoutBtn").onclick = async () => { await fetch("/api/logout", { method: "POST" }); showLogin(); };
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("drawer").classList.remove("on"); });
+
+fetch("/api/me", { credentials: "same-origin" }).then((r) => (r.ok ? start() : showLogin()));
+</script>
+</body>
+</html>

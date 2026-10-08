@@ -4,6 +4,7 @@
 export interface DvbhCase {
   id: string;
   khach_hang: string | null;
+  khu_vuc: string | null;
   seri_san_pham: string | null;
   san_pham_bao_hanh: string | null;
   hang: string | null;
@@ -15,7 +16,7 @@ export interface DvbhCase {
   link_crm: string | null;
 }
 
-const COLS = `CAST(id AS TEXT) AS id, khach_hang, seri_san_pham, san_pham_bao_hanh, hang, tinh, ky_thuat_vien,
+const COLS = `CAST(id AS TEXT) AS id, khach_hang, khu_vuc, seri_san_pham, san_pham_bao_hanh, hang, tinh, ky_thuat_vien,
   tien_do_hoan_thanh, thoi_gian_cskh_tiep_nhan, thoi_gian_hoan_thanh, link_crm`;
 
 export async function caseTheoId(db: D1Database, id: string): Promise<DvbhCase | null> {
