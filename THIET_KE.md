@@ -61,11 +61,12 @@ Tra DVBH: theo `id`, nếu không có thì theo `seri_san_pham` (so cả chữ h
 | Đề xuất (bổ sung) | Người gửi ngoài 3T và **người nhận (To) có @dichvu3t.com** — thư siêu thị báo hàng lỗi gửi Karofi là *điểm phát sinh*, không phải đề xuất |
 | Duyệt | Thư của `@dichvu3t.com` sau thư đề xuất, nội dung mới (đã bỏ dấu) có "đồng ý / đã duyệt", không có "không/chưa đồng ý", không phải câu nhờ/xin duyệt |
 
+| Karofi tiếp nhận | Thư ngoài 3T có "tiếp nhận yêu cầu / phản ánh / khiếu nại" (vd "CSKH tiếp nhận yêu cầu chuyển KTV qua kho") |
 | Giao xử lý | Thư ngoài 3T (Karofi) có "theo mail phê duyệt" / "hỗ trợ xử lý đổi" |
 | Lên SO / Lên DO | Thư ngoài 3T có "đã lên/tạo/xuất ... SO" / "... DO" (chữ hoa). Câu giao việc "cập nhật ngày lên đơn + SO + DO" không tính |
 
 SO/DO là quy trình nội bộ Karofi khi đổi trả → **chỉ ghi thời gian + trạng thái**, không lưu số SO/DO.
-Trạng thái luồng: `phat_sinh` → `cho_duyet` → `da_duyet` → `giao_xu_ly` → `da_len_so` → `da_len_do`.
+Trạng thái luồng: `phat_sinh` → `tiep_nhan` → `cho_duyet` → `da_duyet` → `giao_xu_ly` → `da_len_so` → `da_len_do`.
 
 Mốc duyệt tự động chỉ là **gợi ý**; người dùng xác nhận/sửa trên báo cáo.
 Đổi quy tắc → `POST /api/admin/tinh-lai` (header X-Ingest-Key) áp dụng lại cho toàn bộ thư đã lưu, không cần quét lại Gmail.

@@ -235,6 +235,8 @@ const XIN_DUYET_RE = /\b(ho\s+tro|xin|de\s+nghi|nho)\s+(\S+\s+){0,3}(phe\s+duyet
 
 // ---------------------------------------------------------------- moc sau duyet (noi bo Karofi)
 
+// Karofi tiep nhan phan anh (truoc de xuat): "CSKH tiếp nhận yêu cầu...", "TTDV tiếp nhận phản ánh...".
+const TIEP_NHAN_RE = /\btiep\s+nhan\s+(yeu\s+cau|phan\s+anh|khieu\s+nai|thong\s+tin\s+(loi|hang\s+loi|phan\s+anh))\b/;
 const GIAO_XU_LY_RE = /\btheo\s+(e-?mail|mail|thu)\s+(phe\s+duyet|duyet)\b|\bho\s+tro\s+xu\s+ly\s+doi\b/;
 // Giu chu hoa de phan biet "SO"/"DO" voi chu thuong; chi tinh khi DA lam ("đã lên SO"), khong tinh
 // cau giao viec "cập nhật ngày lên đơn + SO + DO".
@@ -242,7 +244,7 @@ const DA_LAM = String.raw`\b[Dd]a\s+(?:[Ll]en|[Tt]ao|[Xx]uat|[Gg]iao|[Ll]am)\s+[
 const LEN_SO_RE = new RegExp(DA_LAM + String.raw`\bSO\b`);
 const LEN_DO_RE = new RegExp(DA_LAM + String.raw`\bDO\b`);
 
-/** Moc sau duyet cua 1 thu (ben ngoai 3T gui). '' neu khong phai. */
+/** Moc cua 1 thu ben ngoai 3T gui: tiep_nhan | giao_xu_ly | len_so | len_do | len_so_do | ''. */
 export function mocSauDuyet(fromEmail: string, bodyNew: string): string {
   if (domainOf(fromEmail) === BEN_DUYET) return "";
   const text = bodyNew.slice(0, 1500);
@@ -252,7 +254,9 @@ export function mocSauDuyet(fromEmail: string, bodyNew: string): string {
   if (so && doo) return "len_so_do";
   if (doo) return "len_do";
   if (so) return "len_so";
-  if (GIAO_XU_LY_RE.test(giuHoa.toLowerCase())) return "giao_xu_ly";
+  const thuong = giuHoa.toLowerCase();
+  if (GIAO_XU_LY_RE.test(thuong)) return "giao_xu_ly";
+  if (TIEP_NHAN_RE.test(thuong)) return "tiep_nhan";
   return "";
 }
 

@@ -486,6 +486,7 @@ async function tinhLaiMoc(env: Env, luongId: number): Promise<void> {
   // Moc sau duyet (noi bo Karofi) + trang thai tong hop.
   await env.DB.prepare(
     `UPDATE luong SET
+       tiep_nhan_at = (SELECT MIN(sent_at) FROM thu WHERE luong_id = ?1 AND moc = 'tiep_nhan'),
        giao_xu_ly_at = (SELECT MIN(sent_at) FROM thu WHERE luong_id = ?1 AND moc = 'giao_xu_ly'),
        len_so_at = (SELECT MIN(sent_at) FROM thu WHERE luong_id = ?1 AND moc IN ('len_so', 'len_so_do')),
        len_do_at = (SELECT MIN(sent_at) FROM thu WHERE luong_id = ?1 AND moc IN ('len_do', 'len_so_do'))
@@ -500,6 +501,7 @@ async function tinhLaiMoc(env: Env, luongId: number): Promise<void> {
        WHEN giao_xu_ly_at IS NOT NULL THEN 'giao_xu_ly'
        WHEN duyet_at IS NOT NULL THEN 'da_duyet'
        WHEN de_xuat_at IS NOT NULL THEN 'cho_duyet'
+       WHEN tiep_nhan_at IS NOT NULL THEN 'tiep_nhan'
        ELSE 'phat_sinh' END
      WHERE id = ?1`,
   )
@@ -558,7 +560,7 @@ async function listLuong(env: Env, sp: URLSearchParams) {
   const rows = await env.DB.prepare(
     `SELECT id, dvbh_case_id, match_status, ma_trong_mail, serial, loai_yeu_cau, subject, origin_email, origin_at,
             last_at, last_from, msg_count, de_xuat_at, de_xuat_from, duyet_at, duyet_from, duyet_xac_nhan,
-            giao_xu_ly_at, len_so_at, len_do_at, trang_thai
+            tiep_nhan_at, giao_xu_ly_at, len_so_at, len_do_at, trang_thai
      FROM luong ${whereSql} ORDER BY last_at DESC LIMIT 50 OFFSET ${(page - 1) * 50}`,
   )
     .bind(...args)
