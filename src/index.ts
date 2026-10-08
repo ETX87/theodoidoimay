@@ -20,6 +20,7 @@ export interface Env {
   ASSETS: Fetcher;
   ALLOWED_DOMAINS: string; // "dichvu3t.com,karofi.vn"
   APP_PASSWORD: string;
+  PARTNER_API_KEY: string; // DVBH goi GET /api/partner/case (Service Binding)
   INGEST_KEY: string;
 }
 
@@ -69,6 +70,10 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
       throw new HttpError(401, "Sai INGEST_KEY");
     }
     return json(await ingest(env, await req.json()));
+  }
+  if (p === "/api/partner/case" && m === "GET") {
+    if (!(await safeEqual(req.headers.get("X-API-Key") ?? "", env.PARTNER_API_KEY))) throw new HttpError(401, "Sai API key");
+    return json(await luongChoDvbh(env, (url.searchParams.get("id") ?? "").trim().toUpperCase()));
   }
   if (p === "/api/admin/tinh-lai" && m === "POST") {
     if (!(await safeEqual(req.headers.get("X-Ingest-Key") ?? "", env.INGEST_KEY))) throw new HttpError(401, "Sai INGEST_KEY");
@@ -529,6 +534,43 @@ async function tinhLaiToanBo(env: Env) {
   const luong = await env.DB.prepare("SELECT id FROM luong").all<{ id: number }>();
   for (const { id } of luong.results) await tinhLaiMoc(env, id);
   return { ok: true, thu: rows.results.length, luong: luong.results.length };
+}
+
+// ---------------------------------------------------------------- API cho DVBH
+
+const GMAIL_LINK = "https://mail.google.com/mail/u/?authuser=theodoidoimay@gmail.com#all/";
+
+/**
+ * Luong mail cua 1 case DVBH (tab "Luồng mail" trong chi tiet ca). Chi doc. Khong tra toan van thu -
+ * chi phan noi dung moi (cat 2000 ky tu) + link mo Gmail cho thu that.
+ */
+async function luongChoDvbh(env: Env, caseId: string) {
+  if (!caseId) return { found: false, luong: null, thu: [] };
+  const l = await env.DB.prepare(
+    `SELECT id, dvbh_case_id, trang_thai, match_status, loai_yeu_cau, serial, subject, origin_name, origin_email,
+            origin_domain, origin_at, last_at, msg_count, tiep_nhan_at, de_xuat_at, de_xuat_from, duyet_at, duyet_from,
+            duyet_xac_nhan, giao_xu_ly_at, len_so_at, len_do_at, de_xuat_json, ghi_chu
+     FROM luong WHERE dvbh_case_id = ?`,
+  )
+    .bind(caseId)
+    .first<Record<string, unknown>>();
+  if (!l) return { found: false, luong: null, thu: [] };
+  const thu = await env.DB.prepare(
+    `SELECT nguon, gmail_id, from_name, from_email, to_addr, cc_addr, subject, sent_at, substr(body_new, 1, 2000) AS body_new,
+            attachments, la_de_xuat, la_duyet, moc
+     FROM thu WHERE luong_id = ? ORDER BY sent_at`,
+  )
+    .bind(l.id)
+    .all<Record<string, unknown>>();
+  return {
+    found: true,
+    luong: { ...l, de_xuat: JSON.parse(String(l.de_xuat_json || "{}")), de_xuat_json: undefined },
+    thu: thu.results.map((t) => ({
+      ...t,
+      attachments: JSON.parse(String(t.attachments || "[]")),
+      gmail_link: t.nguon === "gmail" ? GMAIL_LINK + t.gmail_id : null,
+    })),
+  };
 }
 
 // ---------------------------------------------------------------- doc / sua
