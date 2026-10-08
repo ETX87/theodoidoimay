@@ -2,6 +2,7 @@
 //   - Ho so "Tranh chấp, khiếu nại" cua DVBH (dong bo ve bang tc_doi_may): phat sinh yeu cau doi, CSKH xu ly, ket thuc.
 //   - Luong mail (bang luong): Karofi tiep nhan, de xuat doi, TBP duyet, giao xu ly, len SO, len DO.
 import { timCaMoi } from "./caMoi";
+import { lamGonThu } from "./gonThu";
 import type { Env } from "./index";
 
 const PHAN_LOAI_DOI_MAY = ["KH đòi đổi máy", "Đổi trả"];
@@ -349,7 +350,7 @@ export async function chiTietHoSo(env: Env, caseId: string) {
   const luongId = (luong.results[0] as { id?: number } | undefined)?.id;
   const thu = luongId
     ? await env.DB.prepare(
-        `SELECT nguon, gmail_id, from_name, from_email, subject, sent_at, substr(body_new, 1, 1500) AS body_new,
+        `SELECT nguon, gmail_id, from_name, from_email, subject, sent_at, substr(body_new, 1, 12000) AS body_new,
                 la_de_xuat, la_duyet, moc FROM thu WHERE luong_id = ? ORDER BY sent_at`,
       )
         .bind(luongId)
@@ -357,7 +358,7 @@ export async function chiTietHoSo(env: Env, caseId: string) {
     : { results: [] };
   return {
     tranh_chap: (tc.results as Record<string, unknown>[]).map((t) => ({ ...t, logs: JSON.parse(String(t.logs_json || "[]")), logs_json: undefined })),
-    thu: thu.results,
+    thu: (thu.results as Record<string, unknown>[]).map((t) => ({ ...t, ...lamGonThu(String(t.body_new ?? "")), body_new: undefined })),
     ca_moi: caMoi ? { ...caMoi, ung_vien: JSON.parse(String(caMoi.ung_vien_json || "[]")), ung_vien_json: undefined } : null,
   };
 }

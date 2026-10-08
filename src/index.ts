@@ -1,4 +1,5 @@
 import { baoCao, chiTietHoSo, dongBoTranhChap } from "./baoCao";
+import { lamGonThu } from "./gonThu";
 import { xacNhanCaMoi } from "./caMoi";
 import { caseTheoId, caseTheoSerial, type DvbhCase } from "./dvbh";
 import {
@@ -562,7 +563,7 @@ async function tinhLaiToanBo(env: Env) {
 const GMAIL_LINK = "https://mail.google.com/mail/u/?authuser=theodoidoimay@gmail.com#all/";
 
 /**
- * Luong mail cua 1 case DVBH (tab "Luồng mail" trong chi tiet ca). Chi doc. Khong tra toan van thu -
+ * Luong mail cua 1 case DVBH (tab "Đổi trả" trong chi tiet ca DVBH, key luong-mail). Chi doc. Khong tra toan van thu -
  * chi phan noi dung moi (cat 2000 ky tu) + link mo Gmail cho thu that.
  */
 async function luongChoDvbh(env: Env, caseId: string) {
@@ -577,7 +578,7 @@ async function luongChoDvbh(env: Env, caseId: string) {
     .first<Record<string, unknown>>();
   if (!l) return { found: false, luong: null, thu: [] };
   const thu = await env.DB.prepare(
-    `SELECT nguon, gmail_id, from_name, from_email, to_addr, cc_addr, subject, sent_at, substr(body_new, 1, 2000) AS body_new,
+    `SELECT nguon, gmail_id, from_name, from_email, to_addr, cc_addr, subject, sent_at, substr(body_new, 1, 12000) AS body_new,
             attachments, la_de_xuat, la_duyet, moc
      FROM thu WHERE luong_id = ? ORDER BY sent_at`,
   )
@@ -595,6 +596,8 @@ async function luongChoDvbh(env: Env, caseId: string) {
     ca_moi: cm ? { ...cm, ung_vien: JSON.parse(String(cm.ung_vien_json || "[]")), ung_vien_json: undefined } : null,
     thu: thu.results.map((t) => ({
       ...t,
+      ...lamGonThu(String(t.body_new ?? "")), // noi_dung (da lam gon, de hien thi) + tom_tat (1 dong)
+      body_new: String(t.body_new ?? "").slice(0, 2000),
       attachments: JSON.parse(String(t.attachments || "[]")),
       gmail_link: t.nguon === "gmail" ? GMAIL_LINK + t.gmail_id : null,
     })),

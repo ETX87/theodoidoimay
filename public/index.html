@@ -135,15 +135,6 @@ const TC_TRANG_THAI = {
   "CSKH dang xu ly": "CSKH đang xử lý", "CSKH khong can xu ly": "CSKH không cần xử lý", "CSKH xu ly xong": "CSKH xử lý xong",
 };
 const tcNhan = (s) => TC_TRANG_THAI[s] || s || "—";
-/** Bo bang de xuat dang chu (da hien rieng) va chu ky mail cho gon. */
-const gonThu = (s) => {
-  let t = String(s || "");
-  const bang = t.search(/\n\s*Ngày TN\/GS đề xuất/);
-  if (bang > 0) t = t.slice(0, bang).trimEnd() + "\n[Bảng đề xuất đổi – xem tab Luồng mail trên DVBH]";
-  const ky = t.search(/\n\s*(Tks|Thanks|Trân trọng|Best regards|Em cảm ơn)[^\n]*/i);
-  if (ky > 0) t = t.slice(0, ky).trimEnd();
-  return t.replace(/\n{3,}/g, "\n\n").trim();
-};
 const NGUON = { ca_hai: "Tranh chấp + mail", tranh_chap: "Chỉ tranh chấp", mail: "Chỉ mail" };
 const BUOC = [
   ["yc_den_de_xuat", "Yêu cầu đổi → Đề xuất"], ["de_xuat_den_duyet", "Đề xuất → Duyệt"], ["duyet_den_giao", "Duyệt → Giao xử lý"],
@@ -264,7 +255,7 @@ async function openDrawer(caseId) {
   const MOC = { tiep_nhan: "Karofi tiếp nhận", giao_xu_ly: "Giao xử lý", len_so: "Lên SO", len_do: "Lên DO", len_so_do: "Lên SO + DO" };
   for (const t of d.thu) {
     const nhan = [t.la_de_xuat ? "Đề xuất đổi" : "", t.la_duyet ? "Duyệt" : "", MOC[t.moc] || ""].filter(Boolean).join(", ");
-    ev.push({ at: t.sent_at, nguon: "Mail", tieu_de: (nhan ? `[${nhan}] ` : "") + (t.from_name || t.from_email), noi_dung: gonThu(t.body_new), link: t.nguon === "gmail" ? `https://mail.google.com/mail/u/?authuser=theodoidoimay@gmail.com#all/${t.gmail_id}` : null });
+    ev.push({ at: t.sent_at, nguon: "Mail", tieu_de: (nhan ? `[${nhan}] ` : "") + (t.from_name || t.from_email), noi_dung: t.noi_dung, link: t.nguon === "gmail" ? `https://mail.google.com/mail/u/?authuser=theodoidoimay@gmail.com#all/${t.gmail_id}` : null });
   }
   const cm = d.ca_moi;
   if (cm?.ca_moi_id && cm.ca_moi_tn_at) ev.push({ at: cm.ca_moi_tn_at, nguon: "DVBH ca mới", tieu_de: `Mở ca mới ${cm.ca_moi_id}`, noi_dung: cm.ca_moi_san_pham || "" });
