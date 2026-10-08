@@ -1,5 +1,5 @@
 /**
- * Thư ký mail đổi máy — đồng bộ Gmail theodoidoimay@gmail.com lên Cloudflare (Worker thuky-mail).
+ * Thư ký mail đổi máy — đồng bộ Gmail theodoidoimay@gmail.com lên Cloudflare (Worker theodoidoimay).
  *
  * Cài đặt (1 lần):
  *   1. Đăng nhập theodoidoimay@gmail.com → https://script.google.com → Dự án mới → dán toàn bộ file này.
@@ -13,7 +13,7 @@
  */
 
 const CONFIG = {
-  WORKER_URL: 'https://thuky-mail.dichvu3t.workers.dev/api/ingest',
+  WORKER_URL: 'https://theodoidoimay.dichvu3t.workers.dev/api/ingest',
   LOOKBACK_DAYS_FIRST_RUN: 30, // lần đầu lấy lại mail 30 ngày gần nhất
   WINDOW_HOURS: 24, // mỗi cửa sổ quét 1 ngày
   OVERLAP_MINUTES: 30, // quét chồng lên cửa sổ trước để không sót mail đến trễ
