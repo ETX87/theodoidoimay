@@ -4,6 +4,7 @@ import {
   domainOf,
   laThuDeXuat,
   laThuDuyet,
+  mocSauDuyet,
   parseAddress,
   phanMoi,
   phanTichTieuDe,
@@ -68,6 +69,10 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
       throw new HttpError(401, "Sai INGEST_KEY");
     }
     return json(await ingest(env, await req.json()));
+  }
+  if (p === "/api/admin/tinh-lai" && m === "POST") {
+    if (!(await safeEqual(req.headers.get("X-Ingest-Key") ?? "", env.INGEST_KEY))) throw new HttpError(401, "Sai INGEST_KEY");
+    return json(await tinhLaiToanBo(env));
   }
   if (p === "/api/login" && m === "POST") return login(req, env);
   if (p === "/api/logout" && m === "POST") {
@@ -202,6 +207,7 @@ async function ingest(env: Env, payload: unknown) {
       method,
       laDeXuat: laThuDeXuat(from.email, msg.to ?? "", tieuDe) ? 1 : 0,
       laDuyet: laThuDuyet(from.email, bodyNew) ? 1 : 0,
+      moc: mocSauDuyet(from.email, bodyNew),
     };
 
     // Thu that thay cho ban trich dan da luu truoc do (cung nguoi gui, lech <= 2 phut).
@@ -233,6 +239,7 @@ async function ingest(env: Env, payload: unknown) {
         method: "trich_dan",
         laDeXuat: laThuDeXuat(q.from.email, q.to, qTieuDe) ? 1 : 0,
         laDuyet: laThuDuyet(q.from.email, qBody) ? 1 : 0,
+        moc: mocSauDuyet(q.from.email, qBody),
       });
       out.quoted++;
     }
@@ -354,16 +361,17 @@ interface ThuValues {
   method: string;
   laDeXuat: number;
   laDuyet: number;
+  moc: string;
 }
 
 async function insertThu(env: Env, v: ThuValues): Promise<void> {
   await env.DB.prepare(
     `INSERT OR IGNORE INTO thu (luong_id, nguon, gmail_id, thread_id, message_id, in_reply_to, refs, from_name, from_email,
-       to_addr, cc_addr, subject, sent_at, body_new, r2_key, attachments, link_method, la_de_xuat, la_duyet)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)`,
+       to_addr, cc_addr, subject, sent_at, body_new, r2_key, attachments, link_method, la_de_xuat, la_duyet, moc)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)`,
   )
     .bind(v.luongId, v.nguon, v.gmailId, v.threadId, v.messageId, v.inReplyTo, v.refs, v.from.name, v.from.email,
-      v.to, v.cc, v.subject, v.sentAt, v.bodyNew, v.r2Key, v.attachments, v.method, v.laDeXuat, v.laDuyet)
+      v.to, v.cc, v.subject, v.sentAt, v.bodyNew, v.r2Key, v.attachments, v.method, v.laDeXuat, v.laDuyet, v.moc)
     .run();
 }
 
@@ -460,7 +468,10 @@ async function tinhLaiMoc(env: Env, luongId: number): Promise<void> {
   )
     .bind(luongId)
     .run();
-  // Moc duyet tu dong chi cap nhat khi nguoi dung chua xac nhan tay.
+  // Moc duyet tu dong chi cap nhat khi nguoi dung chua xac nhan tay (xoa truoc de quy tac moi ap dung dung).
+  await env.DB.prepare("UPDATE luong SET duyet_at = NULL, duyet_from = '', duyet_text = '' WHERE id = ?1 AND duyet_xac_nhan = 0")
+    .bind(luongId)
+    .run();
   await env.DB.prepare(
     `UPDATE luong SET
        duyet_at = d.sent_at, duyet_from = d.from_email, duyet_text = substr(d.body_new, 1, 500)
@@ -472,6 +483,50 @@ async function tinhLaiMoc(env: Env, luongId: number): Promise<void> {
   )
     .bind(luongId)
     .run();
+  // Moc sau duyet (noi bo Karofi) + trang thai tong hop.
+  await env.DB.prepare(
+    `UPDATE luong SET
+       giao_xu_ly_at = (SELECT MIN(sent_at) FROM thu WHERE luong_id = ?1 AND moc = 'giao_xu_ly'),
+       len_so_at = (SELECT MIN(sent_at) FROM thu WHERE luong_id = ?1 AND moc IN ('len_so', 'len_so_do')),
+       len_do_at = (SELECT MIN(sent_at) FROM thu WHERE luong_id = ?1 AND moc IN ('len_do', 'len_so_do'))
+     WHERE id = ?1`,
+  )
+    .bind(luongId)
+    .run();
+  await env.DB.prepare(
+    `UPDATE luong SET trang_thai = CASE
+       WHEN len_do_at IS NOT NULL THEN 'da_len_do'
+       WHEN len_so_at IS NOT NULL THEN 'da_len_so'
+       WHEN giao_xu_ly_at IS NOT NULL THEN 'giao_xu_ly'
+       WHEN duyet_at IS NOT NULL THEN 'da_duyet'
+       WHEN de_xuat_at IS NOT NULL THEN 'cho_duyet'
+       ELSE 'phat_sinh' END
+     WHERE id = ?1`,
+  )
+    .bind(luongId)
+    .run();
+}
+
+/**
+ * Ap dung lai quy tac nhan dien (de xuat / duyet / moc sau duyet) cho TOAN BO thu da luu va tinh lai moi luong.
+ * Dung sau khi doi quy tac - khong can quet lai Gmail. Khong them/xoa thu nao.
+ */
+async function tinhLaiToanBo(env: Env) {
+  const rows = await env.DB.prepare("SELECT id, from_email, to_addr, subject, body_new FROM thu").all<{
+    id: number; from_email: string; to_addr: string; subject: string; body_new: string;
+  }>();
+  const stmts = rows.results.map((t) =>
+    env.DB.prepare("UPDATE thu SET la_de_xuat = ?2, la_duyet = ?3, moc = ?4 WHERE id = ?1").bind(
+      t.id,
+      laThuDeXuat(t.from_email, t.to_addr, phanTichTieuDe(t.subject)) ? 1 : 0,
+      laThuDuyet(t.from_email, t.body_new) ? 1 : 0,
+      mocSauDuyet(t.from_email, t.body_new),
+    ),
+  );
+  for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
+  const luong = await env.DB.prepare("SELECT id FROM luong").all<{ id: number }>();
+  for (const { id } of luong.results) await tinhLaiMoc(env, id);
+  return { ok: true, thu: rows.results.length, luong: luong.results.length };
 }
 
 // ---------------------------------------------------------------- doc / sua
@@ -492,12 +547,18 @@ async function listLuong(env: Env, sp: URLSearchParams) {
     args.push(status);
     where.push(`match_status = ?${args.length}`);
   }
+  const trangThai = sp.get("trang_thai");
+  if (trangThai) {
+    args.push(trangThai);
+    where.push(`trang_thai = ?${args.length}`);
+  }
   const page = Math.max(1, Number(sp.get("page")) || 1);
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const total = await env.DB.prepare(`SELECT COUNT(*) AS n FROM luong ${whereSql}`).bind(...args).first<{ n: number }>();
   const rows = await env.DB.prepare(
     `SELECT id, dvbh_case_id, match_status, ma_trong_mail, serial, loai_yeu_cau, subject, origin_email, origin_at,
-            last_at, last_from, msg_count, de_xuat_at, de_xuat_from, duyet_at, duyet_from, duyet_xac_nhan
+            last_at, last_from, msg_count, de_xuat_at, de_xuat_from, duyet_at, duyet_from, duyet_xac_nhan,
+            giao_xu_ly_at, len_so_at, len_do_at, trang_thai
      FROM luong ${whereSql} ORDER BY last_at DESC LIMIT 50 OFFSET ${(page - 1) * 50}`,
   )
     .bind(...args)
@@ -510,7 +571,7 @@ async function getLuong(env: Env, id: number) {
   if (!l) throw new HttpError(404, "Không có luồng này");
   const thu = await env.DB.prepare(
     `SELECT id, nguon, gmail_id, from_name, from_email, to_addr, cc_addr, subject, sent_at, body_new, attachments,
-            link_method, la_de_xuat, la_duyet
+            link_method, la_de_xuat, la_duyet, moc
      FROM thu WHERE luong_id = ? ORDER BY sent_at`,
   )
     .bind(id)
@@ -541,8 +602,9 @@ async function updateLuong(env: Env, id: number, input: unknown) {
 }
 
 async function stats(env: Env) {
-  const [byMatch, byLoai, moc, totals] = await env.DB.batch([
+  const [byMatch, byTrangThai, byLoai, moc, totals] = await env.DB.batch([
     env.DB.prepare("SELECT match_status, COUNT(*) AS n FROM luong GROUP BY match_status"),
+    env.DB.prepare("SELECT trang_thai, COUNT(*) AS n FROM luong GROUP BY trang_thai"),
     env.DB.prepare("SELECT loai_yeu_cau, COUNT(*) AS n FROM luong GROUP BY loai_yeu_cau ORDER BY n DESC"),
     env.DB.prepare(
       `SELECT COUNT(de_xuat_at) AS co_de_xuat, COUNT(duyet_at) AS co_duyet,
@@ -556,7 +618,7 @@ async function stats(env: Env) {
               (SELECT COUNT(*) FROM bo_qua) AS bo_qua, (SELECT MAX(created_at) FROM thu) AS lan_nhan_cuoi`,
     ),
   ]);
-  return { byMatch: byMatch.results, byLoai: byLoai.results, moc: moc.results[0], totals: totals.results[0] };
+  return { byMatch: byMatch.results, byTrangThai: byTrangThai.results, byLoai: byLoai.results, moc: moc.results[0], totals: totals.results[0] };
 }
 
 // ---------------------------------------------------------------- dang nhap

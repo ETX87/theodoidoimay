@@ -232,6 +232,29 @@ export function laThuDeXuat(fromEmail: string, toAddr: string, tieuDe: SubjectIn
   );
 }
 
+// ---------------------------------------------------------------- moc sau duyet (noi bo Karofi)
+
+const GIAO_XU_LY_RE = /\btheo\s+(e-?mail|mail|thu)\s+(phe\s+duyet|duyet)\b|\bho\s+tro\s+xu\s+ly\s+doi\b/;
+// Giu chu hoa de phan biet "SO"/"DO" voi chu thuong; chi tinh khi DA lam ("đã lên SO"), khong tinh
+// cau giao viec "cập nhật ngày lên đơn + SO + DO".
+const DA_LAM = String.raw`\b[Dd]a\s+(?:[Ll]en|[Tt]ao|[Xx]uat|[Gg]iao|[Ll]am)\s+[^.\n]{0,40}?`;
+const LEN_SO_RE = new RegExp(DA_LAM + String.raw`\bSO\b`);
+const LEN_DO_RE = new RegExp(DA_LAM + String.raw`\bDO\b`);
+
+/** Moc sau duyet cua 1 thu (ben ngoai 3T gui). '' neu khong phai. */
+export function mocSauDuyet(fromEmail: string, bodyNew: string): string {
+  if (domainOf(fromEmail) === BEN_DUYET) return "";
+  const text = bodyNew.slice(0, 1500);
+  const giuHoa = text.normalize("NFD").replace(/\p{M}/gu, "").replace(/đ/g, "d").replace(/Đ/g, "D");
+  const so = LEN_SO_RE.test(giuHoa);
+  const doo = LEN_DO_RE.test(giuHoa);
+  if (so && doo) return "len_so_do";
+  if (doo) return "len_do";
+  if (so) return "len_so";
+  if (GIAO_XU_LY_RE.test(giuHoa.toLowerCase())) return "giao_xu_ly";
+  return "";
+}
+
 export function boDau(s: string): string {
   return s.normalize("NFD").replace(/\p{M}/gu, "").replace(/đ/g, "d").replace(/Đ/g, "D").toLowerCase();
 }

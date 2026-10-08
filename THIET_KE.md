@@ -60,7 +60,14 @@ Tra DVBH: theo `id`, nếu không có thì theo `seri_san_pham` (so cả chữ h
 | Đề xuất (bổ sung) | Người gửi ngoài 3T và **người nhận (To) có @dichvu3t.com** — thư siêu thị báo hàng lỗi gửi Karofi là *điểm phát sinh*, không phải đề xuất |
 | Duyệt | Thư của `@dichvu3t.com` sau thư đề xuất, nội dung mới (đã bỏ dấu) có "đồng ý / đã duyệt", không có "không/chưa đồng ý", không phải câu nhờ/xin duyệt |
 
+| Giao xử lý | Thư ngoài 3T (Karofi) có "theo mail phê duyệt" / "hỗ trợ xử lý đổi" |
+| Lên SO / Lên DO | Thư ngoài 3T có "đã lên/tạo/xuất ... SO" / "... DO" (chữ hoa). Câu giao việc "cập nhật ngày lên đơn + SO + DO" không tính |
+
+SO/DO là quy trình nội bộ Karofi khi đổi trả → **chỉ ghi thời gian + trạng thái**, không lưu số SO/DO.
+Trạng thái luồng: `phat_sinh` → `cho_duyet` → `da_duyet` → `giao_xu_ly` → `da_len_so` → `da_len_do`.
+
 Mốc duyệt tự động chỉ là **gợi ý**; người dùng xác nhận/sửa trên báo cáo.
+Đổi quy tắc → `POST /api/admin/tinh-lai` (header X-Ingest-Key) áp dụng lại cho toàn bộ thư đã lưu, không cần quét lại Gmail.
 
 Quan sát từ mail demo (để làm mốc 6): sau mail duyệt, Karofi gửi "Theo mail phê duyệt..." và
 "Em đã lên SO thu hồi, đổi mới cho NPP: <số SO>" → có thể nhận diện mốc **lên SO đổi** từ mail.
@@ -87,6 +94,8 @@ vì luồng mail có thể bị sót → đối soát chéo để phát hiện h
 | 3 | Nhật ký xử lý | `khieu_nai_tien_trinh`, DVBH `giai_trinh` |
 | 4 | Mail đề xuất đổi trả | theodoidoimay |
 | 5 | Duyệt đổi trả | theodoidoimay (mail TBP) / Khiếu nại `ma_duyet_doi_linh_kien` |
+| 5a | Karofi giao xử lý | theodoidoimay |
+| 5b | Lên SO / Lên DO (nội bộ Karofi) | theodoidoimay |
 | 6 | Mở ca mới đổi cho KH | DVBH case mới cùng `id_khach_hang` sau mốc 5 |
 | 7 | Đổi trả thành công | DVBH case mới hoàn thành / Khiếu nại `ket_qua_doi_may`, `ngay_dong_doi_may` |
 
