@@ -583,9 +583,16 @@ async function luongChoDvbh(env: Env, caseId: string) {
   )
     .bind(l.id)
     .all<Record<string, unknown>>();
+  const cm = await env.DB.prepare(
+    `SELECT id_khach_hang, ca_moi_id, trang_thai_gan, ung_vien_json, ca_moi_tn_at, ca_moi_ht_at, ca_moi_tien_do, ca_moi_san_pham
+     FROM ca_moi WHERE case_goc = ?`,
+  )
+    .bind(caseId)
+    .first<Record<string, unknown>>();
   return {
     found: true,
     luong: { ...l, de_xuat: JSON.parse(String(l.de_xuat_json || "{}")), de_xuat_json: undefined },
+    ca_moi: cm ? { ...cm, ung_vien: JSON.parse(String(cm.ung_vien_json || "[]")), ung_vien_json: undefined } : null,
     thu: thu.results.map((t) => ({
       ...t,
       attachments: JSON.parse(String(t.attachments || "[]")),
