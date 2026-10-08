@@ -17,7 +17,7 @@ const CONFIG = {
   LOOKBACK_DAYS_FIRST_RUN: 30, // lần đầu lấy lại mail 30 ngày gần nhất
   WINDOW_HOURS: 24, // mỗi cửa sổ quét 1 ngày
   OVERLAP_MINUTES: 30, // quét chồng lên cửa sổ trước để không sót mail đến trễ
-  BATCH_SIZE: 20,
+  BATCH_SIZE: 10, // moi thu kem HTML (toi da 300KB) de doc bang de xuat
   MAX_RUN_MS: 4 * 60 * 1000, // Apps Script giới hạn 6 phút/lần
 };
 
@@ -107,7 +107,8 @@ function chuyenDoi_(thread, m) {
     cc: m.getCc(),
     subject: m.getSubject(),
     date: m.getDate().toISOString(),
-    body: (m.getPlainBody() || '').slice(0, 50000),
+    body: (m.getPlainBody() || '').slice(0, 100000),
+    html: (m.getBody() || '').slice(0, 300000),
     attachments: attachments,
   };
 }

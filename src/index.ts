@@ -1,13 +1,34 @@
+import { caseTheoId, caseTheoSerial, type DvbhCase } from "./dvbh";
+import {
+  bangDeXuat,
+  domainOf,
+  laThuDeXuat,
+  laThuDuyet,
+  parseAddress,
+  phanMoi,
+  phanTichTieuDe,
+  tachTrichDan,
+  tatCaEmail,
+  timSerial,
+} from "./parse";
+
 export interface Env {
-  DB: D1Database;
+  DB: D1Database; // thuky-mail-db
+  DVBH_DB: D1Database; // dvbh-db-smarttrade - CHI DOC (src/dvbh.ts)
+  THU: R2Bucket; // toan van thu
   ASSETS: Fetcher;
-  APP_PASSWORD: string; // mat khau dang nhap trang bao cao
-  INGEST_KEY: string; // khoa Apps Script dung de day mail len
+  ALLOWED_DOMAINS: string; // "dichvu3t.com,karofi.vn"
+  APP_PASSWORD: string;
+  INGEST_KEY: string;
 }
 
-const STATUSES = ["moi", "dang_xu_ly", "cho_phan_hoi", "da_xong", "huy"] as const;
-const CASE_CODE_RE = /\bCA-(\d{4})-(\d{5})\b/i;
+const MATCH_STATUSES = ["da_gan", "chua_gan", "nhieu_ung_vien", "cho_dvbh"] as const;
+const MA_CASE_RE = /^(\d{6,8}|SC\d{6,12})$/i;
 const SESSION_DAYS = 30;
+const BO_QUA_GIU_NGAY = 90;
+const SERIAL_GOM_NGAY = 90;
+const LECH_TRICH_DAN_MS = 2 * 60_000;
+const NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -20,6 +41,15 @@ export default {
       console.error(e);
       return json({ error: "Lỗi máy chủ" }, 500);
     }
+  },
+
+  // Doi soat dem: gan lai luong chua gan (DVBH import tre), don bo_qua qua han.
+  async scheduled(_c: ScheduledController, env: Env): Promise<void> {
+    const pending = await env.DB.prepare(
+      "SELECT id FROM luong WHERE match_status != 'da_gan' ORDER BY last_at DESC LIMIT 200",
+    ).all<{ id: number }>();
+    for (const { id } of pending.results) await ganDvbh(env, id);
+    await env.DB.prepare(`DELETE FROM bo_qua WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${BO_QUA_GIU_NGAY} days')`).run();
   },
 } satisfies ExportedHandler<Env>;
 
@@ -48,14 +78,22 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
 
   if (p === "/api/me" && m === "GET") return json({ ok: true });
   if (p === "/api/stats" && m === "GET") return json(await stats(env));
-  if (p === "/api/cases" && m === "GET") return json(await listCases(env, url.searchParams));
-  if (p === "/api/export.csv" && m === "GET") return exportCsv(env);
+  if (p === "/api/luong" && m === "GET") return json(await listLuong(env, url.searchParams));
+  if (p === "/api/bo-qua" && m === "GET") {
+    return json((await env.DB.prepare("SELECT * FROM bo_qua ORDER BY sent_at DESC LIMIT 200").all()).results);
+  }
 
-  const caseMatch = p.match(/^\/api\/cases\/(CA-\d{4}-\d{5})$/i);
-  if (caseMatch) {
-    const code = caseMatch[1].toUpperCase();
-    if (m === "GET") return json(await getCase(env, code));
-    if (m === "PATCH") return json(await updateCase(env, code, await req.json()));
+  const byCase = p.match(/^\/api\/case\/([A-Za-z0-9]+)$/);
+  if (byCase && m === "GET") {
+    const row = await env.DB.prepare("SELECT id FROM luong WHERE dvbh_case_id = ?").bind(byCase[1].toUpperCase()).first<{ id: number }>();
+    return json(row ? await getLuong(env, row.id) : { luong: null, thu: [] });
+  }
+
+  const byId = p.match(/^\/api\/luong\/(\d+)$/);
+  if (byId) {
+    const id = Number(byId[1]);
+    if (m === "GET") return json(await getLuong(env, id));
+    if (m === "PATCH") return json(await updateLuong(env, id, await req.json()));
   }
   throw new HttpError(404, "Không tìm thấy");
 }
@@ -74,289 +112,423 @@ interface InMessage {
   subject?: string;
   date: string;
   body?: string;
+  html?: string;
   attachments?: { name: string; size: number; type: string }[];
+}
+
+interface LuongRow {
+  id: number;
+  dvbh_case_id: string | null;
+  match_status: string;
+  ma_trong_mail: string;
+  serial: string;
+  loai_yeu_cau: string;
+  de_xuat_json: string;
 }
 
 async function ingest(env: Env, payload: unknown) {
   const list = (payload as { messages?: InMessage[] })?.messages;
   if (!Array.isArray(list)) throw new HttpError(400, "Thiếu messages[]");
+  const allowed = env.ALLOWED_DOMAINS.split(",").map((d) => d.trim().toLowerCase()).filter(Boolean);
 
-  // Xu ly mail cu truoc de mail goc luon mo ca, mail tra loi gan vao sau.
+  // Cu truoc moi sau: thu goc mo luong, thu tra loi gan vao sau.
   const sorted = list
     .filter((x) => x && typeof x.gmailId === "string" && x.gmailId)
     .map((x) => ({ ...x, sentAt: toIso(x.date) }))
     .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
 
-  let inserted = 0;
-  let duplicates = 0;
-  const results: { gmailId: string; code: string; linkMethod: string }[] = [];
+  const out = { ok: true, inserted: 0, duplicates: 0, skipped: 0, quoted: 0, results: [] as unknown[] };
 
   for (const msg of sorted) {
     const messageId = cleanId(msg.messageId ?? "");
     const dup = await env.DB.prepare(
-      "SELECT 1 FROM messages WHERE gmail_id = ?1 OR (?2 != '' AND message_id = ?2) LIMIT 1",
+      `SELECT 1 FROM thu WHERE gmail_id = ?1 OR (?2 != '' AND message_id = ?2)
+       UNION ALL SELECT 1 FROM bo_qua WHERE gmail_id = ?1 LIMIT 1`,
     )
       .bind(msg.gmailId, messageId)
       .first();
     if (dup) {
-      duplicates++;
+      out.duplicates++;
       continue;
     }
 
-    const subject = (msg.subject ?? "").slice(0, 1000);
-    const body = (msg.body ?? "").slice(0, 50_000);
     const from = parseAddress(msg.from ?? "");
+    const subject = (msg.subject ?? "").slice(0, 1000);
+
+    // Lop A: khong co ai thuoc ten mien nghiep vu -> chi ghi nhat ky.
+    const emails = tatCaEmail(msg.from ?? "", msg.to ?? "", msg.cc ?? "");
+    if (!emails.some((e) => allowed.includes(domainOf(e)))) {
+      await env.DB.prepare("INSERT OR IGNORE INTO bo_qua (gmail_id, from_email, subject, sent_at, ly_do) VALUES (?, ?, ?, ?, ?)")
+        .bind(msg.gmailId, from.email, subject, msg.sentAt, "ngoai_ten_mien")
+        .run();
+      out.skipped++;
+      continue;
+    }
+
+    const body = msg.body ?? "";
+    const html = msg.html ?? "";
+    const tieuDe = phanTichTieuDe(subject);
+    const bang = bangDeXuat(html);
+    const maBang = (bang["Mã Yêu Cầu"] ?? "").trim();
+    const maCase = tieuDe.maCase || (MA_CASE_RE.test(maBang) ? maBang.toUpperCase() : "");
+    const serial = tieuDe.serial || timSerial(bang["Số Serial"] ?? "") || timSerial(body.slice(0, 20_000));
     const refIds = [...extractIds(msg.inReplyTo ?? ""), ...extractIds(msg.references ?? "")];
 
-    const { caseId, code, linkMethod } = await findOrCreateCase(env, {
-      subject,
-      body,
-      refIds,
-      threadId: msg.threadId ?? "",
-      from,
-      sentAt: msg.sentAt,
+    const { luongId, method } = await timLuong(env, { maCase, refIds, threadId: msg.threadId ?? "", serial, sentAt: msg.sentAt });
+
+    const r2Key = `thu/${msg.gmailId}.json`;
+    await env.THU.put(r2Key, JSON.stringify({ subject, from: msg.from, to: msg.to, cc: msg.cc, body, html }), {
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
     });
 
-    await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO messages (case_id, gmail_id, thread_id, message_id, in_reply_to, refs, from_name, from_email,
-           to_addr, cc_addr, subject, sent_at, body, body_new, attachments, link_method)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)`,
-      ).bind(
-        caseId,
-        msg.gmailId,
-        msg.threadId ?? "",
-        messageId,
-        cleanId(msg.inReplyTo ?? ""),
-        refIds.join(" "),
-        from.name,
-        from.email,
-        (msg.to ?? "").slice(0, 4000),
-        (msg.cc ?? "").slice(0, 4000),
-        subject,
-        msg.sentAt,
-        body,
-        stripQuoted(body).slice(0, 20_000),
-        JSON.stringify((msg.attachments ?? []).slice(0, 50)),
-        linkMethod,
-      ),
-      // Mail den khong theo thu tu (vd CC vao giua luong) -> neu mail nay cu hon thi no moi la goc.
-      env.DB.prepare(
-        `UPDATE cases SET
-           msg_count = msg_count + 1,
-           last_from = CASE WHEN ?2 >= last_at THEN ?3 ELSE last_from END,
-           last_at = MAX(last_at, ?2),
-           subject = CASE WHEN ?2 < origin_at THEN ?4 ELSE subject END,
-           origin_name = CASE WHEN ?2 < origin_at THEN ?5 ELSE origin_name END,
-           origin_email = CASE WHEN ?2 < origin_at THEN ?3 ELSE origin_email END,
-           origin_domain = CASE WHEN ?2 < origin_at THEN ?6 ELSE origin_domain END,
-           origin_at = MIN(origin_at, ?2),
-           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-         WHERE id = ?1`,
-      ).bind(caseId, msg.sentAt, from.email, subject, from.name, domainOf(from.email)),
-    ]);
+    const bodyNew = phanMoi(body).slice(0, 20_000);
+    const values = {
+      luongId,
+      nguon: "gmail",
+      gmailId: msg.gmailId,
+      threadId: msg.threadId ?? "",
+      messageId,
+      inReplyTo: cleanId(msg.inReplyTo ?? ""),
+      refs: refIds.join(" "),
+      from,
+      to: (msg.to ?? "").slice(0, 4000),
+      cc: (msg.cc ?? "").slice(0, 4000),
+      subject,
+      sentAt: msg.sentAt,
+      bodyNew,
+      r2Key,
+      attachments: JSON.stringify((msg.attachments ?? []).slice(0, 50)),
+      method,
+      laDeXuat: laThuDeXuat(from.email, msg.to ?? "", tieuDe) ? 1 : 0,
+      laDuyet: laThuDuyet(from.email, bodyNew) ? 1 : 0,
+    };
 
-    inserted++;
-    results.push({ gmailId: msg.gmailId, code, linkMethod });
+    // Thu that thay cho ban trich dan da luu truoc do (cung nguoi gui, lech <= 2 phut).
+    const quotedTwin = await timThuGan(env, from.email, msg.sentAt, "trich_dan");
+    if (quotedTwin) await env.DB.prepare("DELETE FROM thu WHERE id = ?").bind(quotedTwin.id).run();
+    await insertThu(env, values);
+    if (quotedTwin && quotedTwin.luongId !== luongId) await gopLuong(env, quotedTwin.luongId, luongId);
+
+    // Chuoi thu cu nam trong phan trich dan -> biet ai mo luong, luc nao.
+    for (const q of tachTrichDan(body)) {
+      if (!q.from.email || (await timThuGan(env, q.from.email, q.sentAt))) continue;
+      const qTieuDe = phanTichTieuDe(q.subject);
+      const qBody = phanMoi(q.body);
+      await insertThu(env, {
+        ...values,
+        nguon: "trich_dan",
+        gmailId: `q_${await hash(`${q.from.email}|${q.sentAt.slice(0, 16)}|${qTieuDe.goc}`)}`,
+        messageId: "",
+        inReplyTo: "",
+        refs: "",
+        from: q.from,
+        to: q.to.slice(0, 4000),
+        cc: q.cc.slice(0, 4000),
+        subject: q.subject.slice(0, 1000),
+        sentAt: q.sentAt,
+        bodyNew: qBody.slice(0, 20_000),
+        r2Key: "",
+        attachments: "[]",
+        method: "trich_dan",
+        laDeXuat: laThuDeXuat(q.from.email, q.to, qTieuDe) ? 1 : 0,
+        laDuyet: laThuDuyet(q.from.email, qBody) ? 1 : 0,
+      });
+      out.quoted++;
+    }
+
+    await env.DB.prepare(
+      `UPDATE luong SET
+         ma_trong_mail = CASE WHEN ma_trong_mail = '' THEN ?2 ELSE ma_trong_mail END,
+         serial = CASE WHEN serial = '' THEN ?3 ELSE serial END,
+         loai_yeu_cau = CASE WHEN loai_yeu_cau = '' THEN ?4 ELSE loai_yeu_cau END,
+         de_xuat_json = CASE WHEN de_xuat_json = '{}' THEN ?5 ELSE de_xuat_json END
+       WHERE id = ?1`,
+    )
+      .bind(luongId, maCase, serial, tieuDe.loai, JSON.stringify(bang))
+      .run();
+
+    const finalId = await ganDvbh(env, luongId);
+    out.inserted++;
+    out.results.push({ gmailId: msg.gmailId, luongId: finalId, method, maCase, serial });
   }
-  return { ok: true, inserted, duplicates, results };
+  return out;
 }
 
-async function findOrCreateCase(
+async function timLuong(
   env: Env,
-  m: { subject: string; body: string; refIds: string[]; threadId: string; from: Addr; sentAt: string },
-): Promise<{ caseId: number; code: string; linkMethod: string }> {
-  // 1) Ma ca ghi trong tieu de / noi dung -> uu tien cao nhat (do nguoi dung chu dong gan).
-  const codeHit = (m.subject.match(CASE_CODE_RE) ?? m.body.slice(0, 5000).match(CASE_CODE_RE))?.[0];
-  if (codeHit) {
-    const row = await env.DB.prepare("SELECT id, code FROM cases WHERE code = ?").bind(codeHit.toUpperCase()).first<CaseRef>();
-    if (row) return { caseId: row.id, code: row.code, linkMethod: "ma-ca" };
+  m: { maCase: string; refIds: string[]; threadId: string; serial: string; sentAt: string },
+): Promise<{ luongId: number; method: string }> {
+  if (m.maCase) {
+    const row = await env.DB.prepare("SELECT id FROM luong WHERE dvbh_case_id = ?1 OR ma_trong_mail = ?1 LIMIT 1")
+      .bind(m.maCase)
+      .first<{ id: number }>();
+    if (row) return { luongId: row.id, method: "ma_case" };
   }
-
-  // 2) Header In-Reply-To / References -> mail tra loi cua 1 mail da luu.
   const refs = m.refIds.slice(-50);
   if (refs.length) {
-    const placeholders = refs.map((_, i) => `?${i + 1}`).join(",");
     const row = await env.DB.prepare(
-      `SELECT c.id, c.code FROM messages m JOIN cases c ON c.id = m.case_id
-       WHERE m.message_id IN (${placeholders}) ORDER BY m.sent_at LIMIT 1`,
+      `SELECT luong_id AS id FROM thu WHERE message_id IN (${refs.map((_, i) => `?${i + 1}`).join(",")}) LIMIT 1`,
     )
       .bind(...refs)
-      .first<CaseRef>();
-    if (row) return { caseId: row.id, code: row.code, linkMethod: "references" };
+      .first<{ id: number }>();
+    if (row) return { luongId: row.id, method: "references" };
   }
-
-  // 3) Cung luong Gmail.
   if (m.threadId) {
-    const row = await env.DB.prepare(
-      "SELECT c.id, c.code FROM messages m JOIN cases c ON c.id = m.case_id WHERE m.thread_id = ? LIMIT 1",
-    )
-      .bind(m.threadId)
-      .first<CaseRef>();
-    if (row) return { caseId: row.id, code: row.code, linkMethod: "thread" };
+    const row = await env.DB.prepare("SELECT luong_id AS id FROM thu WHERE thread_id = ? LIMIT 1").bind(m.threadId).first<{ id: number }>();
+    if (row) return { luongId: row.id, method: "thread" };
   }
-
-  // 4) Mo ca moi. Nam theo gio Viet Nam cua mail goc.
-  const year = new Date(Date.parse(m.sentAt) + 7 * 3600_000).getUTCFullYear();
-  const counter = await env.DB.prepare(
-    "INSERT INTO counters (year, n) VALUES (?1, 1) ON CONFLICT(year) DO UPDATE SET n = n + 1 RETURNING n",
-  )
-    .bind(year)
-    .first<{ n: number }>();
-  const code = `CA-${year}-${String(counter!.n).padStart(5, "0")}`;
-  const created = await env.DB.prepare(
-    `INSERT INTO cases (code, subject, origin_name, origin_email, origin_domain, origin_at, last_at, last_from)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?4) RETURNING id`,
-  )
-    .bind(code, m.subject, m.from.name, m.from.email, domainOf(m.from.email), m.sentAt)
+  if (m.serial) {
+    const row = await env.DB.prepare(
+      `SELECT id FROM luong WHERE serial = ?1 AND last_at >= strftime('%Y-%m-%dT%H:%M:%fZ', ?2, '-${SERIAL_GOM_NGAY} days') ORDER BY last_at DESC LIMIT 1`,
+    )
+      .bind(m.serial, m.sentAt)
+      .first<{ id: number }>();
+    if (row) return { luongId: row.id, method: "serial" };
+  }
+  const created = await env.DB.prepare("INSERT INTO luong (origin_at, last_at) VALUES (?1, ?1) RETURNING id")
+    .bind(m.sentAt)
     .first<{ id: number }>();
-  return { caseId: created!.id, code, linkMethod: "moi" };
+  return { luongId: created!.id, method: "moi" };
 }
 
-interface CaseRef {
-  id: number;
-  code: string;
+/** Tim thu cung nguoi gui, lech <= 2 phut (de khong luu trung thu that va ban trich dan). */
+async function timThuGan(
+  env: Env,
+  email: string,
+  sentAt: string,
+  nguon?: string,
+): Promise<{ id: number; luongId: number } | null> {
+  const t = Date.parse(sentAt);
+  const row = await env.DB.prepare(
+    `SELECT id, luong_id AS luongId FROM thu WHERE from_email = ?1 AND sent_at BETWEEN ?2 AND ?3 ${nguon ? "AND nguon = ?4" : ""} LIMIT 1`,
+  )
+    .bind(email, new Date(t - LECH_TRICH_DAN_MS).toISOString(), new Date(t + LECH_TRICH_DAN_MS).toISOString(), ...(nguon ? [nguon] : []))
+    .first<{ id: number; luongId: number }>();
+  return row ?? null;
 }
 
-// ---------------------------------------------------------------- doc / sua ca
+interface ThuValues {
+  luongId: number;
+  nguon: string;
+  gmailId: string;
+  threadId: string;
+  messageId: string;
+  inReplyTo: string;
+  refs: string;
+  from: { name: string; email: string };
+  to: string;
+  cc: string;
+  subject: string;
+  sentAt: string;
+  bodyNew: string;
+  r2Key: string;
+  attachments: string;
+  method: string;
+  laDeXuat: number;
+  laDuyet: number;
+}
 
-async function listCases(env: Env, sp: URLSearchParams) {
+async function insertThu(env: Env, v: ThuValues): Promise<void> {
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO thu (luong_id, nguon, gmail_id, thread_id, message_id, in_reply_to, refs, from_name, from_email,
+       to_addr, cc_addr, subject, sent_at, body_new, r2_key, attachments, link_method, la_de_xuat, la_duyet)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)`,
+  )
+    .bind(v.luongId, v.nguon, v.gmailId, v.threadId, v.messageId, v.inReplyTo, v.refs, v.from.name, v.from.email,
+      v.to, v.cc, v.subject, v.sentAt, v.bodyNew, v.r2Key, v.attachments, v.method, v.laDeXuat, v.laDuyet)
+    .run();
+}
+
+/**
+ * Xac dinh case DVBH cho luong (theo ma trong mail, roi theo serial), gop luong neu case da co luong khac,
+ * roi tinh lai cac moc. Tra ve id luong cuoi cung (co the khac neu bi gop).
+ */
+async function ganDvbh(env: Env, luongId: number): Promise<number> {
+  const l = await env.DB.prepare("SELECT * FROM luong WHERE id = ?").bind(luongId).first<LuongRow>();
+  if (!l) return luongId;
+
+  if (l.match_status !== "da_gan") {
+    let found: DvbhCase | null = null;
+    let status = "chua_gan";
+    let note = "";
+    if (l.ma_trong_mail) {
+      found = await caseTheoId(env.DVBH_DB, l.ma_trong_mail);
+      if (!found) {
+        status = "cho_dvbh";
+        note = JSON.stringify({ ly_do: "DVBH chưa có case này", ma: l.ma_trong_mail });
+      }
+    }
+    if (!found && l.serial) {
+      const list = await caseTheoSerial(env.DVBH_DB, l.serial);
+      if (list.length === 1) found = list[0];
+      else if (list.length > 1 && status !== "cho_dvbh") {
+        status = "nhieu_ung_vien";
+        note = JSON.stringify({ ly_do: "Serial khớp nhiều case", ung_vien: list.map((c) => c.id) });
+      }
+    }
+
+    if (found) {
+      const other = await env.DB.prepare("SELECT id FROM luong WHERE dvbh_case_id = ? AND id != ?")
+        .bind(found.id, luongId)
+        .first<{ id: number }>();
+      if (other) {
+        await gopLuong(env, luongId, other.id);
+        return other.id;
+      }
+      await env.DB.prepare(
+        `UPDATE luong SET dvbh_case_id = ?2, match_status = 'da_gan', match_note = '', dvbh_json = ?3,
+           dvbh_checked_at = ${NOW_SQL} WHERE id = ?1`,
+      )
+        .bind(luongId, found.id, JSON.stringify(found))
+        .run();
+    } else {
+      await env.DB.prepare(`UPDATE luong SET match_status = ?2, match_note = ?3, dvbh_checked_at = ${NOW_SQL} WHERE id = ?1`)
+        .bind(luongId, status, note)
+        .run();
+    }
+  }
+  await tinhLaiMoc(env, luongId);
+  return luongId;
+}
+
+async function gopLuong(env: Env, tu: number, vao: number): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare("UPDATE thu SET luong_id = ?2 WHERE luong_id = ?1").bind(tu, vao),
+    env.DB.prepare(
+      `UPDATE luong SET
+         ma_trong_mail = CASE WHEN ma_trong_mail = '' THEN (SELECT ma_trong_mail FROM luong WHERE id = ?1) ELSE ma_trong_mail END,
+         serial = CASE WHEN serial = '' THEN (SELECT serial FROM luong WHERE id = ?1) ELSE serial END,
+         loai_yeu_cau = CASE WHEN loai_yeu_cau = '' THEN (SELECT loai_yeu_cau FROM luong WHERE id = ?1) ELSE loai_yeu_cau END,
+         de_xuat_json = CASE WHEN de_xuat_json = '{}' THEN (SELECT de_xuat_json FROM luong WHERE id = ?1) ELSE de_xuat_json END,
+         ghi_chu = trim(ghi_chu || ' ' || (SELECT ghi_chu FROM luong WHERE id = ?1))
+       WHERE id = ?2`,
+    ).bind(tu, vao),
+    env.DB.prepare("DELETE FROM luong WHERE id = ?").bind(tu),
+  ]);
+  await tinhLaiMoc(env, vao);
+}
+
+/** Tinh lai thong tin tong hop cua luong tu cac thu: goc, cuoi, so thu, moc de xuat, moc duyet. */
+async function tinhLaiMoc(env: Env, luongId: number): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE luong SET
+       msg_count = (SELECT COUNT(*) FROM thu WHERE luong_id = ?1),
+       origin_at = (SELECT MIN(sent_at) FROM thu WHERE luong_id = ?1),
+       origin_name = COALESCE((SELECT from_name FROM thu WHERE luong_id = ?1 ORDER BY sent_at LIMIT 1), ''),
+       origin_email = COALESCE((SELECT from_email FROM thu WHERE luong_id = ?1 ORDER BY sent_at LIMIT 1), ''),
+       subject = COALESCE((SELECT subject FROM thu WHERE luong_id = ?1 ORDER BY sent_at LIMIT 1), ''),
+       last_at = (SELECT MAX(sent_at) FROM thu WHERE luong_id = ?1),
+       last_from = COALESCE((SELECT from_email FROM thu WHERE luong_id = ?1 ORDER BY sent_at DESC LIMIT 1), ''),
+       de_xuat_at = (SELECT MIN(sent_at) FROM thu WHERE luong_id = ?1 AND la_de_xuat = 1),
+       de_xuat_from = COALESCE((SELECT from_email FROM thu WHERE luong_id = ?1 AND la_de_xuat = 1 ORDER BY sent_at LIMIT 1), ''),
+       updated_at = ${NOW_SQL}
+     WHERE id = ?1`,
+  )
+    .bind(luongId)
+    .run();
+  await env.DB.prepare(
+    `UPDATE luong SET origin_domain = CASE WHEN instr(origin_email, '@') > 0
+       THEN substr(origin_email, instr(origin_email, '@') + 1) ELSE '' END WHERE id = ?1`,
+  )
+    .bind(luongId)
+    .run();
+  // Moc duyet tu dong chi cap nhat khi nguoi dung chua xac nhan tay.
+  await env.DB.prepare(
+    `UPDATE luong SET
+       duyet_at = d.sent_at, duyet_from = d.from_email, duyet_text = substr(d.body_new, 1, 500)
+     FROM (SELECT sent_at, from_email, body_new FROM thu
+           WHERE luong_id = ?1 AND la_duyet = 1
+             AND sent_at >= COALESCE((SELECT de_xuat_at FROM luong WHERE id = ?1), '')
+           ORDER BY sent_at LIMIT 1) AS d
+     WHERE luong.id = ?1 AND luong.duyet_xac_nhan = 0`,
+  )
+    .bind(luongId)
+    .run();
+}
+
+// ---------------------------------------------------------------- doc / sua
+
+async function listLuong(env: Env, sp: URLSearchParams) {
   const where: string[] = [];
   const args: unknown[] = [];
   const q = (sp.get("q") ?? "").trim();
   if (q) {
     args.push(`%${q}%`);
     const i = args.length;
-    where.push(`(code LIKE ?${i} OR subject LIKE ?${i} OR origin_email LIKE ?${i} OR origin_name LIKE ?${i}
-      OR customer LIKE ?${i} OR assignee LIKE ?${i} OR note LIKE ?${i}
-      OR id IN (SELECT case_id FROM messages WHERE body LIKE ?${i} OR from_email LIKE ?${i}))`);
+    where.push(`(dvbh_case_id LIKE ?${i} OR ma_trong_mail LIKE ?${i} OR serial LIKE ?${i} OR subject LIKE ?${i}
+      OR origin_email LIKE ?${i} OR ghi_chu LIKE ?${i}
+      OR id IN (SELECT luong_id FROM thu WHERE body_new LIKE ?${i} OR from_email LIKE ?${i}))`);
   }
-  const status = sp.get("status");
-  if (status && (STATUSES as readonly string[]).includes(status)) {
+  const status = sp.get("match");
+  if (status && (MATCH_STATUSES as readonly string[]).includes(status)) {
     args.push(status);
-    where.push(`status = ?${args.length}`);
-  }
-  const from = sp.get("from"); // YYYY-MM-DD theo gio VN, loc theo ngay mo ca
-  if (from) {
-    args.push(from);
-    where.push(`date(origin_at, '+7 hours') >= ?${args.length}`);
-  }
-  const to = sp.get("to");
-  if (to) {
-    args.push(to);
-    where.push(`date(origin_at, '+7 hours') <= ?${args.length}`);
+    where.push(`match_status = ?${args.length}`);
   }
   const page = Math.max(1, Number(sp.get("page")) || 1);
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-
-  const total = await env.DB.prepare(`SELECT COUNT(*) AS n FROM cases ${whereSql}`).bind(...args).first<{ n: number }>();
+  const total = await env.DB.prepare(`SELECT COUNT(*) AS n FROM luong ${whereSql}`).bind(...args).first<{ n: number }>();
   const rows = await env.DB.prepare(
-    `SELECT code, subject, origin_name, origin_email, origin_domain, origin_at, last_at, last_from, msg_count,
-            status, assignee, customer
-     FROM cases ${whereSql} ORDER BY last_at DESC LIMIT 50 OFFSET ${(page - 1) * 50}`,
+    `SELECT id, dvbh_case_id, match_status, ma_trong_mail, serial, loai_yeu_cau, subject, origin_email, origin_at,
+            last_at, last_from, msg_count, de_xuat_at, de_xuat_from, duyet_at, duyet_from, duyet_xac_nhan
+     FROM luong ${whereSql} ORDER BY last_at DESC LIMIT 50 OFFSET ${(page - 1) * 50}`,
   )
     .bind(...args)
     .all();
-  return { total: total?.n ?? 0, page, pageSize: 50, cases: rows.results };
+  return { total: total?.n ?? 0, page, pageSize: 50, luong: rows.results };
 }
 
-async function getCase(env: Env, code: string) {
-  const c = await env.DB.prepare("SELECT * FROM cases WHERE code = ?").bind(code).first<Record<string, unknown>>();
-  if (!c) throw new HttpError(404, "Không có ca này");
-  const msgs = await env.DB.prepare(
-    `SELECT gmail_id, thread_id, message_id, from_name, from_email, to_addr, cc_addr, subject, sent_at,
-            body, body_new, attachments, link_method
-     FROM messages WHERE case_id = ? ORDER BY sent_at`,
+async function getLuong(env: Env, id: number) {
+  const l = await env.DB.prepare("SELECT * FROM luong WHERE id = ?").bind(id).first();
+  if (!l) throw new HttpError(404, "Không có luồng này");
+  const thu = await env.DB.prepare(
+    `SELECT id, nguon, gmail_id, from_name, from_email, to_addr, cc_addr, subject, sent_at, body_new, attachments,
+            link_method, la_de_xuat, la_duyet
+     FROM thu WHERE luong_id = ? ORDER BY sent_at`,
   )
-    .bind(c.id)
+    .bind(id)
     .all();
-  return { case: c, messages: msgs.results };
+  return { luong: l, thu: thu.results };
 }
 
-async function updateCase(env: Env, code: string, input: unknown) {
-  const body = (input ?? {}) as Record<string, unknown>;
-  const sets: string[] = [];
-  const args: unknown[] = [];
-  for (const field of ["status", "assignee", "customer", "note"] as const) {
-    if (typeof body[field] !== "string") continue;
-    const value = (body[field] as string).trim().slice(0, field === "note" ? 5000 : 200);
-    if (field === "status" && !(STATUSES as readonly string[]).includes(value)) {
-      throw new HttpError(400, "Trạng thái không hợp lệ");
-    }
-    args.push(value);
-    sets.push(`${field} = ?${args.length}`);
+async function updateLuong(env: Env, id: number, input: unknown) {
+  const b = (input ?? {}) as Record<string, unknown>;
+  if (typeof b.ghi_chu === "string") {
+    await env.DB.prepare("UPDATE luong SET ghi_chu = ? WHERE id = ?").bind(b.ghi_chu.slice(0, 5000), id).run();
   }
-  if (!sets.length) throw new HttpError(400, "Không có gì để cập nhật");
-  args.push(code);
-  const res = await env.DB.prepare(
-    `UPDATE cases SET ${sets.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE code = ?${args.length}`,
-  )
-    .bind(...args)
-    .run();
-  if (!res.meta.changes) throw new HttpError(404, "Không có ca này");
-  return { ok: true };
+  // Xac nhan / sua moc duyet tay: { duyet_at: ISO | null }
+  if ("duyet_at" in b) {
+    const at = typeof b.duyet_at === "string" && b.duyet_at ? toIso(b.duyet_at) : null;
+    await env.DB.prepare("UPDATE luong SET duyet_at = ?, duyet_xac_nhan = 1 WHERE id = ?").bind(at, id).run();
+  }
+  // Gan tay case DVBH: { dvbh_case_id: "1347322" }
+  if (typeof b.dvbh_case_id === "string") {
+    const ma = b.dvbh_case_id.trim().toUpperCase();
+    if (!MA_CASE_RE.test(ma)) throw new HttpError(400, "Mã case không hợp lệ");
+    await env.DB.prepare("UPDATE luong SET ma_trong_mail = ?, match_status = 'chua_gan', dvbh_case_id = NULL WHERE id = ?")
+      .bind(ma, id)
+      .run();
+    return { ok: true, luongId: await ganDvbh(env, id) };
+  }
+  return { ok: true, luongId: id };
 }
 
 async function stats(env: Env) {
-  const [byStatus, byDay, byMonth, byDomain, response, stale, totals] = await env.DB.batch([
-    env.DB.prepare("SELECT status, COUNT(*) AS n FROM cases GROUP BY status"),
+  const [byMatch, byLoai, moc, totals] = await env.DB.batch([
+    env.DB.prepare("SELECT match_status, COUNT(*) AS n FROM luong GROUP BY match_status"),
+    env.DB.prepare("SELECT loai_yeu_cau, COUNT(*) AS n FROM luong GROUP BY loai_yeu_cau ORDER BY n DESC"),
     env.DB.prepare(
-      `SELECT date(origin_at, '+7 hours') AS day, COUNT(*) AS n FROM cases
-       WHERE origin_at >= datetime('now', '-30 days') GROUP BY day ORDER BY day`,
+      `SELECT COUNT(de_xuat_at) AS co_de_xuat, COUNT(duyet_at) AS co_duyet,
+              AVG(CASE WHEN duyet_at IS NOT NULL AND de_xuat_at IS NOT NULL
+                  THEN (julianday(duyet_at) - julianday(de_xuat_at)) * 24 END) AS tb_gio_de_xuat_den_duyet
+       FROM luong`,
     ),
     env.DB.prepare(
-      `SELECT strftime('%Y-%m', origin_at, '+7 hours') AS month, COUNT(*) AS n,
-              SUM(status = 'da_xong') AS done FROM cases
-       WHERE origin_at >= datetime('now', '-365 days') GROUP BY month ORDER BY month`,
-    ),
-    env.DB.prepare(
-      `SELECT origin_domain AS domain, COUNT(*) AS n FROM cases GROUP BY origin_domain ORDER BY n DESC LIMIT 10`,
-    ),
-    // Thoi gian phan hoi dau tien = mail dau tien cua nguoi KHAC nguoi mo ca.
-    env.DB.prepare(
-      `SELECT AVG((julianday(r.first_reply) - julianday(c.origin_at)) * 24) AS avg_hours, COUNT(*) AS n
-       FROM cases c JOIN (
-         SELECT m.case_id, MIN(m.sent_at) AS first_reply FROM messages m JOIN cases c2 ON c2.id = m.case_id
-         WHERE lower(m.from_email) != lower(c2.origin_email) GROUP BY m.case_id
-       ) r ON r.case_id = c.id
-       WHERE c.origin_at >= datetime('now', '-30 days')`,
-    ),
-    env.DB.prepare(
-      `SELECT code, subject, last_at, status, assignee FROM cases
-       WHERE status NOT IN ('da_xong', 'huy') AND last_at < datetime('now', '-3 days')
-       ORDER BY last_at LIMIT 20`,
-    ),
-    env.DB.prepare(
-      `SELECT (SELECT COUNT(*) FROM cases) AS cases, (SELECT COUNT(*) FROM messages) AS messages,
-              (SELECT MAX(created_at) FROM messages) AS last_sync`,
+      `SELECT (SELECT COUNT(*) FROM luong) AS luong, (SELECT COUNT(*) FROM thu) AS thu,
+              (SELECT COUNT(*) FROM thu WHERE nguon = 'trich_dan') AS thu_trich_dan,
+              (SELECT COUNT(*) FROM bo_qua) AS bo_qua, (SELECT MAX(created_at) FROM thu) AS lan_nhan_cuoi`,
     ),
   ]);
-  return {
-    byStatus: byStatus.results,
-    byDay: byDay.results,
-    byMonth: byMonth.results,
-    byDomain: byDomain.results,
-    response: response.results[0],
-    stale: stale.results,
-    totals: totals.results[0],
-  };
-}
-
-async function exportCsv(env: Env): Promise<Response> {
-  const rows = await env.DB.prepare(
-    `SELECT code, subject, origin_name, origin_email, origin_domain, origin_at, last_at, last_from, msg_count,
-            status, assignee, customer, note FROM cases ORDER BY origin_at`,
-  ).all<Record<string, unknown>>();
-  const cols = ["code", "subject", "origin_name", "origin_email", "origin_domain", "origin_at", "last_at", "last_from",
-    "msg_count", "status", "assignee", "customer", "note"];
-  const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const lines = [cols.join(","), ...rows.results.map((r) => cols.map((c) => esc(r[c])).join(","))];
-  return new Response("\uFEFF" + lines.join("\r\n"), {
-    headers: {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="cac-ca-${new Date().toISOString().slice(0, 10)}.csv"`,
-    },
-  });
+  return { byMatch: byMatch.results, byLoai: byLoai.results, moc: moc.results[0], totals: totals.results[0] };
 }
 
 // ---------------------------------------------------------------- dang nhap
@@ -392,7 +564,16 @@ async function sign(env: Env, data: string): Promise<string> {
     ["sign"],
   );
   const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
-  return btoa(String.fromCharCode(...new Uint8Array(mac))).replace(/[+/=]/g, (c) => ({ "+": "-", "/": "_", "=": "" })[c]!);
+  return b64url(new Uint8Array(mac));
+}
+
+async function hash(s: string): Promise<string> {
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return b64url(new Uint8Array(d)).slice(0, 24);
+}
+
+function b64url(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes)).replace(/[+/=]/g, (c) => ({ "+": "-", "/": "_", "=": "" })[c]!);
 }
 
 async function safeEqual(a: string, b: string): Promise<boolean> {
@@ -407,21 +588,6 @@ async function safeEqual(a: string, b: string): Promise<boolean> {
 
 // ---------------------------------------------------------------- tien ich
 
-interface Addr {
-  name: string;
-  email: string;
-}
-
-function parseAddress(raw: string): Addr {
-  const m = raw.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
-  if (m) return { name: m[1].trim(), email: m[2].trim().toLowerCase() };
-  return { name: "", email: raw.trim().toLowerCase() };
-}
-
-function domainOf(email: string): string {
-  return email.includes("@") ? email.split("@").pop()! : "";
-}
-
 function cleanId(raw: string): string {
   return raw.trim().replace(/^<|>$/g, "");
 }
@@ -433,25 +599,6 @@ function extractIds(raw: string): string[] {
 function toIso(date: string): string {
   const t = Date.parse(date);
   return new Date(Number.isNaN(t) ? Date.now() : t).toISOString();
-}
-
-// Cat phan trich dan mail cu (Gmail/Outlook, tieng Viet/Anh) de chi giu noi dung moi.
-function stripQuoted(body: string): string {
-  const lines = body.replace(/\r\n/g, "\n").split("\n");
-  const markers = [
-    /^On .+wrote:\s*$/i,
-    /^Vào .+đã viết:\s*$/i,
-    /^-{2,}\s*(Original Message|Forwarded message|Thư gốc|Tin nhắn đã chuyển tiếp)/i,
-    /^(From|Từ):\s.+/i,
-    /^_{10,}\s*$/,
-  ];
-  const out: string[] = [];
-  for (const line of lines) {
-    if (markers.some((re) => re.test(line.trim()))) break;
-    if (line.trimStart().startsWith(">")) continue;
-    out.push(line);
-  }
-  return out.join("\n").trim();
 }
 
 function json(data: unknown, status = 200, headers: Record<string, string> = {}): Response {

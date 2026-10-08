@@ -9,14 +9,29 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"]
   },
-  // D1 rieng cua thuky-mail (tach khoi DVBH de khong lam nang dvbh-db-smarttrade).
   "d1_databases": [
+    // D1 rieng cua theodoidoimay (tach khoi DVBH de khong lam nang dvbh-db-smarttrade).
     {
       "binding": "DB",
       "database_name": "thuky-mail-db",
       "database_id": "8884a9d9-e098-46da-8e40-7d8a4969a592",
       "migrations_dir": "migrations"
+    },
+    // D1 cua DVBH - CHI DOC theo quy uoc (chi SELECT theo id / seri_san_pham, gom trong src/dvbh.ts).
+    // "remote": true de wrangler dev cung doc DVBH that (khong co ban local).
+    {
+      "binding": "DVBH_DB",
+      "database_name": "dvbh-db-smarttrade",
+      "database_id": "d47ee3fa-3796-4814-a0dc-3ce2a7628c82",
+      "remote": true
     }
-  ]
+  ],
+  // Toan van text + HTML tung thu (D1 chi giu phan noi dung moi).
+  "r2_buckets": [{ "binding": "THU", "bucket_name": "theodoidoimay-thu" }],
+  // 02:00 gio VN: gan lai luong chua gan case DVBH, xoa bo_qua qua 90 ngay.
+  "triggers": { "crons": ["0 19 * * *"] },
+  "vars": {
+    "ALLOWED_DOMAINS": "dichvu3t.com,karofi.vn"
+  }
   // Secrets (wrangler secret put): APP_PASSWORD (dang nhap web), INGEST_KEY (Apps Script gui mail len).
 }
