@@ -109,5 +109,5 @@ danh sách đối soát (có khiếu nại đổi máy nhưng không có mail, c
 1. ✅ Thu mail Gmail → Worker → D1.
 2. ✅ Lọc tên miền + lưu 3 lớp + R2 + tách thư trích dẫn + nhận diện mã case/serial + tra DVBH + mốc đề xuất/duyệt.
 3. ✅ Cron đối soát đêm 02:00 (gắn lại, dọn `bo_qua`) — đã có khung, sẽ mở rộng khi nối Khiếu nại.
-4. DVBH: thêm cột `id_khach_hang` (QuickSight) + tab "Luồng mail" (Service Binding) — xem trước khi deploy.
+4. ⏳ DVBH: cột `id_khach_hang` (migration 0127) + tab "Luồng mail" (Service Binding `THEODOI_APP` → `GET /api/partner/case`) — code xong trên nhánh `luong-mail` của repo DVBH, **chờ duyệt deploy**. Pipeline QuickSight: xem `YEU_CAU_PIPELINE_ID_KHACH_HANG.md`.
 5. Nối Khiếu nại + hồ sơ đổi trả 7 mốc + báo cáo.
