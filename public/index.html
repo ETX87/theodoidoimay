@@ -293,7 +293,7 @@ function caMoiHtml(cm) {
       ${uv.map((u) => `<tr style="cursor:default"><td><b>${esc(u.id)}</b>${u.khop_model ? ' <span class="badge b-teal">khớp model</span>' : ""}</td><td>${fmt(u.tn_at)}</td>
         <td style="white-space:normal">${esc(u.san_pham)}</td><td>${esc(u.tien_do)}</td>
         <td>${u.id === cm.ca_moi_id ? "Đang chọn" : `<button class="btn" data-camoi="${esc(u.id)}">Chọn</button>`}</td></tr>`).join("")}
-      </tbody></table>` : `<div class="s">Chưa có ca nào cùng ID khách hàng mở trong 60 ngày sau khi duyệt.</div>`}
+      </tbody></table>` : `<div class="s">Chưa có ca nào cùng ID khách hàng, khớp danh mục Theo dõi đổi trả, mở trong 30 ngày sau khi duyệt.</div>`}
     <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
       ${cm.trang_thai_gan !== "xac_nhan" || cm.ca_moi_id ? `<button class="btn" data-camoi="">Xác nhận không có ca mới</button>` : ""}
       ${cm.trang_thai_gan === "xac_nhan" ? `<button class="btn" data-camoi="__bo__">Bỏ xác nhận (tự tìm lại)</button>` : ""}

@@ -1,9 +1,17 @@
 // Noi ca MOI (mo de doi may cho KH) voi ca GOC - CHI theo case_dvbh.id_khach_hang (chot nghiep vu, khong tra SDT).
 // Chay trong luot dong bo 3h (baoCao.ts dongBoTranhChap). CHI DOC DVBH, query di theo index idx_case_id_khach_hang.
+//
+// Quy tac (chot 2026-10-09):
+//   - Chi TIM trong 30 ngay sau moc duyet; qua 30 ngay khong tim nua (luong tu ket thuc - doiTra.ts tuKetThucLuong).
+//   - Ung vien = ca cung ID khach hang, tiep nhan trong cua so, VA khop danh muc "Theo dõi đổi trả" trong Cai dat DVBH:
+//     loai_yeu_cau thuoc settings_loai_yeu_cau_doi_tra + luu_y_loi_linh_kien thuoc settings_luu_y_loi_linh_kien_doi_tra
+//     (bat_tat = 1, doc truc tiep -> sua Cai dat la ap dung ngay).
+//   - Dung 1 ung vien -> tu gan. Nhieu ung vien -> tu gan neu dung 1 ca khop model, con lai cho nguoi dung chon.
+//   - Da co ca moi (tu gan hoac gan tay) -> NGUNG tim, chi doc lai tien do cua dung ca do (1 query theo id).
 import type { Env } from "./index";
 import { ghiNhatKy, HE_THONG } from "./doiTra";
 
-const CUA_SO_NGAY = 60; // ca moi phai duoc tiep nhan trong 60 ngay sau moc duyet
+export const CUA_SO_NGAY = 30;
 
 interface CaseDv {
   id: string;
@@ -22,6 +30,8 @@ export interface UngVien {
   tien_do: string;
   khop_model: boolean;
 }
+
+const COLS = "CAST(id AS TEXT) AS id, id_khach_hang, san_pham_bao_hanh, thoi_gian_cskh_tiep_nhan, thoi_gian_hoan_thanh, tien_do_hoan_thanh";
 
 /** "2026-09-28 17:08:40" (gio VN) -> ISO UTC. */
 function vnToIso(s: string | null): string | null {
@@ -49,135 +59,108 @@ function khopModel(spUngVien: string, spGoc: string, modelDeXuat: string): boole
   return maModel(spUngVien).some((m) => muc.has(m));
 }
 
+const toUngVien = (c: CaseDv, khop: boolean): UngVien => ({
+  id: c.id.toUpperCase(),
+  tn_at: vnToIso(c.thoi_gian_cskh_tiep_nhan),
+  ht_at: vnToIso(c.thoi_gian_hoan_thanh),
+  san_pham: c.san_pham_bao_hanh ?? "",
+  tien_do: c.tien_do_hoan_thanh ?? "",
+  khop_model: khop,
+});
+
 /**
- * Tim ca moi cho moi ho so DA DUYET doi (co duyet_at trong luong mail). Ket qua luu bang ca_moi.
- * Ho so da duoc nguoi dung xac nhan tay (trang_thai_gan = 'xac_nhan') chi lam moi thoi gian/tien do cua ca da chon.
+ * Luong dang mo + da duyet: (a) chua co ca moi va con trong 30 ngay sau duyet -> tim ung vien; (b) da co ca moi -> doc lai
+ * tien do ca do. Luong da ket thuc / qua cua so ma chua co ca moi -> khong truy van gi.
  */
 export async function timCaMoi(env: Env, now: string) {
+  const tuNgay = new Date(Date.parse(now) - CUA_SO_NGAY * 86400_000).toISOString();
   const goc = await env.DB.prepare(
     `SELECT l.dvbh_case_id AS case_id, l.duyet_at, l.de_xuat_json, m.trang_thai_gan, m.ca_moi_id
      FROM luong l LEFT JOIN ca_moi m ON m.case_goc = l.dvbh_case_id
-     WHERE l.dvbh_case_id IS NOT NULL AND l.ket_thuc_at IS NULL -- luong da ket thuc: khong truy van DVBH nua
-       AND (l.duyet_at IS NOT NULL OR (m.trang_thai_gan = 'xac_nhan' AND m.ca_moi_id IS NOT NULL))`,
-  ).all<{ case_id: string; duyet_at: string | null; de_xuat_json: string; trang_thai_gan: string | null; ca_moi_id: string | null }>();
-  if (!goc.results.length) return { ho_so: 0, tu_dong: 0, can_xac_nhan: 0 };
-
-  const ids = goc.results.map((g) => g.case_id);
-  const gocDv = await env.DVBH_DB.prepare(
-    `SELECT CAST(id AS TEXT) AS id, id_khach_hang, san_pham_bao_hanh, thoi_gian_cskh_tiep_nhan, thoi_gian_hoan_thanh, tien_do_hoan_thanh
-     FROM case_dvbh WHERE id IN (SELECT value FROM json_each(?1))`,
+     WHERE l.dvbh_case_id IS NOT NULL AND l.ket_thuc_at IS NULL
+       AND (m.ca_moi_id IS NOT NULL
+            OR (l.duyet_at >= ?1 AND COALESCE(m.trang_thai_gan, '') != 'xac_nhan'))`, // xac_nhan + NULL = "khong co ca moi"
   )
-    .bind(JSON.stringify(ids))
-    .all<CaseDv>();
-  const gocMap = new Map(gocDv.results.map((c) => [c.id.toUpperCase(), c]));
+    .bind(tuNgay)
+    .all<{ case_id: string; duyet_at: string | null; de_xuat_json: string; trang_thai_gan: string | null; ca_moi_id: string | null }>();
+  if (!goc.results.length) return { ho_so: 0, tim: 0, tu_dong: 0, can_xac_nhan: 0 };
 
+  const daCo = goc.results.filter((g) => g.ca_moi_id);
+  const canTim = goc.results.filter((g) => !g.ca_moi_id && g.duyet_at);
+
+  // (b) Lam moi tien do cac ca moi da gan.
+  const daCoDv = daCo.length
+    ? await env.DVBH_DB.prepare(`SELECT ${COLS} FROM case_dvbh WHERE id IN (SELECT value FROM json_each(?1))`)
+        .bind(JSON.stringify(daCo.map((g) => g.ca_moi_id)))
+        .all<CaseDv>()
+    : { results: [] as CaseDv[] };
+  const daCoMap = new Map(daCoDv.results.map((c) => [c.id.toUpperCase(), c]));
+
+  // (a) Tim ung vien: thong tin ca goc + ca cung ID KH khop danh muc doi tra, tiep nhan tu moc duyet som nhat.
+  const gocDv = canTim.length
+    ? await env.DVBH_DB.prepare(`SELECT ${COLS} FROM case_dvbh WHERE id IN (SELECT value FROM json_each(?1))`)
+        .bind(JSON.stringify(canTim.map((g) => g.case_id)))
+        .all<CaseDv>()
+    : { results: [] as CaseDv[] };
+  const gocMap = new Map(gocDv.results.map((c) => [c.id.toUpperCase(), c]));
   const khs = [...new Set(gocDv.results.map((c) => c.id_khach_hang).filter((x): x is string => !!x))];
-  const minDuyet = goc.results.map((g) => g.duyet_at).filter((x): x is string => !!x).sort()[0];
-  const ungVienAll = khs.length && minDuyet
+  const minDuyet = canTim.map((g) => g.duyet_at!).sort()[0];
+  const ungVienAll = khs.length
     ? await env.DVBH_DB.prepare(
-        `SELECT CAST(id AS TEXT) AS id, id_khach_hang, san_pham_bao_hanh, thoi_gian_cskh_tiep_nhan, thoi_gian_hoan_thanh, tien_do_hoan_thanh
-         FROM case_dvbh WHERE id_khach_hang IN (SELECT value FROM json_each(?1)) AND thoi_gian_cskh_tiep_nhan >= ?2`,
+        `SELECT ${COLS} FROM case_dvbh
+         WHERE id_khach_hang IN (SELECT value FROM json_each(?1)) AND thoi_gian_cskh_tiep_nhan >= ?2
+           AND loai_yeu_cau IN (SELECT loai_yeu_cau FROM settings_loai_yeu_cau_doi_tra WHERE bat_tat = 1)
+           AND luu_y_loi_linh_kien IN (SELECT luu_y_loi_linh_kien FROM settings_luu_y_loi_linh_kien_doi_tra WHERE bat_tat = 1)`,
       )
         .bind(JSON.stringify(khs), isoToVn(minDuyet))
         .all<CaseDv>()
     : { results: [] as CaseDv[] };
-  // Ca moi gan tay (co the ngoai danh sach ung vien) -> doc lai tien do/thoi gian moi lan dong bo.
-  const ganTay = goc.results.filter((g) => g.trang_thai_gan === "xac_nhan" && g.ca_moi_id).map((g) => g.ca_moi_id!);
-  const ganTayDv = ganTay.length
-    ? await env.DVBH_DB.prepare(
-        `SELECT CAST(id AS TEXT) AS id, id_khach_hang, san_pham_bao_hanh, thoi_gian_cskh_tiep_nhan, thoi_gian_hoan_thanh, tien_do_hoan_thanh
-         FROM case_dvbh WHERE id IN (SELECT value FROM json_each(?1))`,
-      )
-        .bind(JSON.stringify(ganTay))
-        .all<CaseDv>()
-    : { results: [] as CaseDv[] };
-  const ganTayMap = new Map(ganTayDv.results.map((c) => [c.id.toUpperCase(), c]));
 
   let tuDong = 0;
   let canXacNhan = 0;
   const stmts: D1PreparedStatement[] = [];
-  for (const g of goc.results) {
+  const upsert = (caseGoc: string, kh: string, id: string | null, gan: string, uvJson: string | null, uv: UngVien | undefined) =>
+    env.DB.prepare(
+      `INSERT INTO ca_moi (case_goc, id_khach_hang, ca_moi_id, trang_thai_gan, ung_vien_json, ca_moi_tn_at, ca_moi_ht_at,
+         ca_moi_tien_do, ca_moi_san_pham, synced_at)
+       VALUES (?1, ?2, ?3, ?4, COALESCE(?5, '[]'), ?6, ?7, ?8, ?9, ?10)
+       ON CONFLICT(case_goc) DO UPDATE SET
+         id_khach_hang = CASE WHEN excluded.id_khach_hang != '' THEN excluded.id_khach_hang ELSE ca_moi.id_khach_hang END,
+         ca_moi_id = excluded.ca_moi_id, trang_thai_gan = excluded.trang_thai_gan,
+         ung_vien_json = COALESCE(?5, ca_moi.ung_vien_json),
+         ca_moi_tn_at = excluded.ca_moi_tn_at, ca_moi_ht_at = excluded.ca_moi_ht_at,
+         ca_moi_tien_do = excluded.ca_moi_tien_do, ca_moi_san_pham = excluded.ca_moi_san_pham, synced_at = excluded.synced_at`,
+    ).bind(caseGoc, kh, id, gan, uvJson, uv?.tn_at ?? null, uv?.ht_at ?? null, uv?.tien_do ?? "", uv?.san_pham ?? "", now);
+
+  for (const g of daCo) {
+    const c = daCoMap.get(g.ca_moi_id!);
+    if (c) stmts.push(upsert(g.case_id, "", g.ca_moi_id, g.trang_thai_gan ?? "xac_nhan", null, toUngVien(c, false)));
+  }
+
+  for (const g of canTim) {
     const dv = gocMap.get(g.case_id);
-    const kh = dv?.id_khach_hang ?? null;
-    const tu = g.duyet_at ? isoToVn(g.duyet_at) : "9999";
-    const den = g.duyet_at ? isoToVn(new Date(Date.parse(g.duyet_at) + CUA_SO_NGAY * 86400_000).toISOString()) : "";
+    const kh = dv?.id_khach_hang ?? "";
+    if (!kh) {
+      stmts.push(upsert(g.case_id, "", null, "khong_co_id_kh", "[]", undefined));
+      continue;
+    }
+    const tu = isoToVn(g.duyet_at!);
+    const den = isoToVn(new Date(Date.parse(g.duyet_at!) + CUA_SO_NGAY * 86400_000).toISOString());
     const modelDeXuat = String((JSON.parse(g.de_xuat_json || "{}") as Record<string, string>)["Máy/Linh kiện đề xuất đổi"] ?? "");
-    const uv: UngVien[] = kh && g.duyet_at
-      ? ungVienAll.results
-          .filter((c) => c.id_khach_hang === kh && c.id.toUpperCase() !== g.case_id && (c.thoi_gian_cskh_tiep_nhan ?? "") >= tu && (c.thoi_gian_cskh_tiep_nhan ?? "") <= den)
-          .sort((a, b) => (a.thoi_gian_cskh_tiep_nhan ?? "").localeCompare(b.thoi_gian_cskh_tiep_nhan ?? ""))
-          .map((c) => ({
-            id: c.id.toUpperCase(),
-            tn_at: vnToIso(c.thoi_gian_cskh_tiep_nhan),
-            ht_at: vnToIso(c.thoi_gian_hoan_thanh),
-            san_pham: c.san_pham_bao_hanh ?? "",
-            tien_do: c.tien_do_hoan_thanh ?? "",
-            khop_model: khopModel(c.san_pham_bao_hanh ?? "", dv?.san_pham_bao_hanh ?? "", modelDeXuat),
-          }))
-      : [];
-
-    let trangThai: string;
-    let chon: UngVien | undefined;
-    if (g.trang_thai_gan === "xac_nhan") {
-      trangThai = "xac_nhan";
-      chon = uv.find((u) => u.id === g.ca_moi_id);
-      const tay = g.ca_moi_id ? ganTayMap.get(g.ca_moi_id) : undefined;
-      if (!chon && tay) {
-        chon = {
-          id: g.ca_moi_id!,
-          tn_at: vnToIso(tay.thoi_gian_cskh_tiep_nhan),
-          ht_at: vnToIso(tay.thoi_gian_hoan_thanh),
-          san_pham: tay.san_pham_bao_hanh ?? "",
-          tien_do: tay.tien_do_hoan_thanh ?? "",
-          khop_model: false,
-        };
-      }
-    } else if (!kh) {
-      trangThai = "khong_co_id_kh";
-    } else {
-      const manh = uv.filter((u) => u.khop_model);
-      if (manh.length === 1) {
-        trangThai = "tu_dong";
-        chon = manh[0];
-      } else if (manh.length > 1 || uv.length > 1) trangThai = "nhieu_ung_vien";
-      else if (uv.length === 1) trangThai = "goi_y";
-      else trangThai = "chua_co";
+    const uv = ungVienAll.results
+      .filter((c) => c.id_khach_hang === kh && c.id.toUpperCase() !== g.case_id && (c.thoi_gian_cskh_tiep_nhan ?? "") >= tu && (c.thoi_gian_cskh_tiep_nhan ?? "") <= den)
+      .sort((a, b) => (a.thoi_gian_cskh_tiep_nhan ?? "").localeCompare(b.thoi_gian_cskh_tiep_nhan ?? ""))
+      .map((c) => toUngVien(c, khopModel(c.san_pham_bao_hanh ?? "", dv?.san_pham_bao_hanh ?? "", modelDeXuat)));
+    const manh = uv.filter((u) => u.khop_model);
+    const chon = uv.length === 1 ? uv[0] : manh.length === 1 ? manh[0] : undefined;
+    const gan = chon ? "tu_dong" : uv.length ? "nhieu_ung_vien" : "chua_co";
+    if (chon) {
+      tuDong++;
+      stmts.push(ghiNhatKy(env, g.case_id, "gan_ca_moi", { nguoi: HE_THONG }, `Tự động: ca đổi ${chon.id} (cùng ID khách hàng, khớp danh mục đổi trả${chon.khop_model ? ", khớp model" : ""})`));
     }
-    if (trangThai === "tu_dong") tuDong++;
-    if (trangThai === "tu_dong" && chon && chon.id !== g.ca_moi_id) {
-      stmts.push(ghiNhatKy(env, g.case_id, "gan_ca_moi", { nguoi: HE_THONG }, `Tự động: ca mới ${chon.id} (cùng ID khách hàng, khớp model)`));
-    }
-    if (trangThai === "nhieu_ung_vien" || trangThai === "goi_y") canXacNhan++;
-
-    stmts.push(
-      env.DB.prepare(
-        `INSERT INTO ca_moi (case_goc, id_khach_hang, ca_moi_id, trang_thai_gan, ung_vien_json, ca_moi_tn_at, ca_moi_ht_at,
-           ca_moi_tien_do, ca_moi_san_pham, synced_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-         ON CONFLICT(case_goc) DO UPDATE SET
-           id_khach_hang = excluded.id_khach_hang,
-           ca_moi_id = CASE WHEN ca_moi.trang_thai_gan = 'xac_nhan' THEN ca_moi.ca_moi_id ELSE excluded.ca_moi_id END,
-           trang_thai_gan = excluded.trang_thai_gan,
-           ung_vien_json = excluded.ung_vien_json,
-           ca_moi_tn_at = CASE WHEN ca_moi.trang_thai_gan = 'xac_nhan' AND excluded.ca_moi_tn_at IS NULL THEN ca_moi.ca_moi_tn_at ELSE excluded.ca_moi_tn_at END,
-           ca_moi_ht_at = CASE WHEN ca_moi.trang_thai_gan = 'xac_nhan' AND excluded.ca_moi_tn_at IS NULL THEN ca_moi.ca_moi_ht_at ELSE excluded.ca_moi_ht_at END,
-           ca_moi_tien_do = CASE WHEN ca_moi.trang_thai_gan = 'xac_nhan' AND excluded.ca_moi_tn_at IS NULL THEN ca_moi.ca_moi_tien_do ELSE excluded.ca_moi_tien_do END,
-           ca_moi_san_pham = CASE WHEN ca_moi.trang_thai_gan = 'xac_nhan' AND excluded.ca_moi_tn_at IS NULL THEN ca_moi.ca_moi_san_pham ELSE excluded.ca_moi_san_pham END,
-           synced_at = excluded.synced_at`,
-      ).bind(
-        g.case_id,
-        kh ?? "",
-        chon?.id ?? (trangThai === "xac_nhan" ? g.ca_moi_id : null),
-        trangThai,
-        JSON.stringify(uv.slice(0, 15)),
-        chon?.tn_at ?? null,
-        chon?.ht_at ?? null,
-        chon?.tien_do ?? "",
-        chon?.san_pham ?? "",
-        now,
-      ),
-    );
+    if (gan === "nhieu_ung_vien") canXacNhan++;
+    stmts.push(upsert(g.case_id, kh, chon?.id ?? null, gan, JSON.stringify(uv.slice(0, 15)), chon));
   }
   for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
-  return { ho_so: goc.results.length, tu_dong: tuDong, can_xac_nhan: canXacNhan };
+  return { ho_so: goc.results.length, tim: canTim.length, tu_dong: tuDong, can_xac_nhan: canXacNhan };
 }

@@ -1,6 +1,6 @@
 import { baoCao, chiTietHoSo, dongBoTranhChap } from "./baoCao";
 import { lamGonThu } from "./gonThu";
-import { danhSachLuong, ganCaMoi, ghiNhatKy, HE_THONG, ketThucLuong, moLaiLuong, nhatKyCase } from "./doiTra";
+import { danhSachLuong, ganCaMoi, ghiNhatKy, HE_THONG, ketThucLuong, moLaiLuong, nhatKyCase, tuKetThucLuong } from "./doiTra";
 import { caseTheoId, caseTheoSerial, type DvbhCase } from "./dvbh";
 import {
   bangDeXuat,
@@ -19,7 +19,6 @@ import {
 export interface Env {
   DB: D1Database; // thuky-mail-db
   DVBH_DB: D1Database; // dvbh-db-smarttrade - CHI DOC (src/dvbh.ts)
-  THU: R2Bucket; // toan van thu
   ASSETS: Fetcher;
   ALLOWED_DOMAINS: string; // "dichvu3t.com,karofi.vn"
   THEO_DOI_TU: string; // ngay bat dau theo doi mail (doi soat "co yeu cau doi nhung chua co mail" chi tinh tu ngay nay)
@@ -56,8 +55,12 @@ export default {
       await dongBoTranhChap(env);
       return;
     }
+    await tuKetThucLuong(env);
+    // Chi thu gan lai luong chua gan con moi (<= 30 ngay) - luong cu khong gan duoc thi bo, khong thu lai moi dem.
     const pending = await env.DB.prepare(
-      "SELECT id FROM luong WHERE match_status != 'da_gan' AND ket_thuc_at IS NULL ORDER BY last_at DESC LIMIT 200",
+      `SELECT id FROM luong WHERE match_status != 'da_gan' AND ket_thuc_at IS NULL
+         AND COALESCE(last_at, created_at) >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days')
+       ORDER BY last_at DESC LIMIT 200`,
     ).all<{ id: number }>();
     for (const { id } of pending.results) await ganDvbh(env, id);
     await env.DB.prepare(`DELETE FROM bo_qua WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${BO_QUA_GIU_NGAY} days')`).run();
@@ -86,7 +89,7 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   }
   if (p === "/api/partner/luong-list" && m === "GET") {
     if (!(await safeEqual(req.headers.get("X-API-Key") ?? "", env.PARTNER_API_KEY))) throw new HttpError(401, "Sai API key");
-    return json(await danhSachLuong(env));
+    return json(await danhSachLuong(env, url.searchParams.get("trang_thai") ?? ""));
   }
   // Thao tac tu DVBH: DVBH da kiem tra dang nhap + quyen, gui kem ten nguoi thao tac de ghi nhat ky.
   const thaoTac = p.match(/^\/api\/partner\/doi-tra\/(ket-thuc|mo-lai|ca-moi)$/);
@@ -108,9 +111,9 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
     if (!(await safeEqual(req.headers.get("X-Ingest-Key") ?? "", env.INGEST_KEY))) throw new HttpError(401, "Sai INGEST_KEY");
     return json(await dongBoTranhChap(env));
   }
-  if (p === "/api/admin/trich-dan-lai" && m === "POST") {
+  if (p === "/api/admin/tu-ket-thuc" && m === "POST") {
     if (!(await safeEqual(req.headers.get("X-Ingest-Key") ?? "", env.INGEST_KEY))) throw new HttpError(401, "Sai INGEST_KEY");
-    return json(await trichDanLai(env));
+    return json(await tuKetThucLuong(env));
   }
   if (p === "/api/admin/tinh-lai" && m === "POST") {
     if (!(await safeEqual(req.headers.get("X-Ingest-Key") ?? "", env.INGEST_KEY))) throw new HttpError(401, "Sai INGEST_KEY");
@@ -233,10 +236,9 @@ async function ingest(env: Env, payload: unknown) {
 
     const { luongId, method } = await timLuong(env, { maCase, refIds, threadId: msg.threadId ?? "", serial, sentAt: msg.sentAt });
 
-    const r2Key = `thu/${msg.gmailId}.json`;
-    await env.THU.put(r2Key, JSON.stringify({ subject, from: msg.from, to: msg.to, cc: msg.cc, body, html }), {
-      httpMetadata: { contentType: "application/json; charset=utf-8" },
-    });
+    // Chot 2026-10-09: KHONG luu toan van thu/dinh kem (R2) - chi luu thong tin luong mail trong D1. Ban goc va dinh kem
+    // van nam trong Gmail theodoidoimay (link "Mở trong Gmail").
+    const r2Key = "";
 
     const bodyNew = phanMoi(body).slice(0, 20_000);
     const values = {
@@ -318,59 +320,17 @@ async function luuTrichDan(env: Env, body: string, values: ThuValues): Promise<n
   return n;
 }
 
-/**
- * Tach lai phan trich dan cua MOI thu that da luu (doc toan van tu R2) - bu cac thu trich dan bi bo sot (vd do quy
- * tac chong trung cu chi so nguoi gui + thoi gian). Chi THEM thu con thieu, khong xoa gi; tinh lai moc cac luong co them.
- */
-async function trichDanLai(env: Env) {
-  const rows = await env.DB.prepare(
-    `SELECT t.luong_id, t.gmail_id, t.thread_id, t.from_email, t.to_addr, t.subject, t.sent_at, t.r2_key
-     FROM thu t WHERE t.nguon = 'gmail' AND t.r2_key != ''`,
-  ).all<{ luong_id: number; gmail_id: string; thread_id: string; from_email: string; to_addr: string; subject: string; sent_at: string; r2_key: string }>();
-  let them = 0;
-  const luongCoThem = new Set<number>();
-  for (const t of rows.results) {
-    const obj = await env.THU.get(t.r2_key);
-    if (!obj) continue;
-    const goc = (await obj.json()) as { body?: string };
-    const n = await luuTrichDan(env, goc.body ?? "", {
-      luongId: t.luong_id, nguon: "trich_dan", gmailId: "", threadId: t.thread_id, messageId: "", inReplyTo: "", refs: "",
-      from: { name: "", email: t.from_email }, to: t.to_addr, cc: "", subject: t.subject, sentAt: t.sent_at, bodyNew: "",
-      r2Key: "", attachments: "[]", method: "trich_dan", laDeXuat: 0, laDuyet: 0, moc: "",
-    });
-    if (n) {
-      them += n;
-      luongCoThem.add(t.luong_id);
-    }
-  }
-  for (const id of luongCoThem) await tinhLaiMoc(env, id);
-  return { ok: true, thu_that: rows.results.length, trich_dan_them: them, luong_tinh_lai: [...luongCoThem] };
-}
-
-/**
- * Thu da luu tu ban Apps Script cu (khong co HTML) duoc gui lai kem HTML -> bo sung toan van vao R2 va
- * bang de xuat cho luong neu luong chua co. Khong xoa/them thu nao.
- */
+/** Thu da luu duoc gui lai kem HTML (quet lai Gmail) -> bo sung bang de xuat cho luong neu luong chua co. */
 async function boSungHtml(env: Env, msg: InMessage & { sentAt: string }, out: { htmlBoSung?: number }): Promise<void> {
   const row = await env.DB.prepare(
-    `SELECT t.luong_id, t.r2_key, l.de_xuat_json FROM thu t JOIN luong l ON l.id = t.luong_id
-     WHERE t.gmail_id = ? AND t.nguon = 'gmail'`,
+    `SELECT t.luong_id, l.de_xuat_json FROM thu t JOIN luong l ON l.id = t.luong_id WHERE t.gmail_id = ? AND t.nguon = 'gmail'`,
   )
     .bind(msg.gmailId)
-    .first<{ luong_id: number; r2_key: string; de_xuat_json: string }>();
-  if (!row?.r2_key) return;
-  const cu = await env.THU.get(row.r2_key);
-  const daCoHtml = cu ? Boolean(((await cu.json()) as { html?: string }).html) : false;
-  if (daCoHtml) return;
-  await env.THU.put(
-    row.r2_key,
-    JSON.stringify({ subject: msg.subject, from: msg.from, to: msg.to, cc: msg.cc, body: msg.body ?? "", html: msg.html }),
-    { httpMetadata: { contentType: "application/json; charset=utf-8" } },
-  );
+    .first<{ luong_id: number; de_xuat_json: string }>();
+  if (!row || row.de_xuat_json !== "{}") return;
   const bang = bangDeXuat(msg.html ?? "");
-  if (row.de_xuat_json === "{}" && Object.keys(bang).length) {
-    await env.DB.prepare("UPDATE luong SET de_xuat_json = ? WHERE id = ?").bind(JSON.stringify(bang), row.luong_id).run();
-  }
+  if (!Object.keys(bang).length) return;
+  await env.DB.prepare("UPDATE luong SET de_xuat_json = ? WHERE id = ?").bind(JSON.stringify(bang), row.luong_id).run();
   out.htmlBoSung = (out.htmlBoSung ?? 0) + 1;
 }
 

@@ -130,3 +130,12 @@ danh sách đối soát (có khiếu nại đổi máy nhưng không có mail, c
 7. ✅ Kết thúc luồng / gán ca đổi thủ công từ DVBH (migration 0007, `src/doiTra.ts`): `luong.ket_thuc_*` - luồng đã kết thúc
    không còn truy vấn DVBH (đồng bộ 3h, tìm ca mới, gắn lại ban đêm); bảng `nhat_ky` ghi ai làm gì ("Hệ thống" khi tự động).
    API đối tác: `POST /api/partner/doi-tra/{ket-thuc|mo-lai|ca-moi}`, `GET /api/partner/luong-list` (tab "Luồng duyệt đổi trả" DVBH).
+
+8. ✅ Chốt 2026-10-09 (tối ưu dài hạn):
+   - KHÔNG lưu toàn văn/đính kèm vào R2 nữa - chỉ lưu thông tin luồng mail trong D1 (bản gốc ở Gmail). Bỏ binding R2
+     (bucket `theodoidoimay-thu` còn ~19 object cũ, không dùng). Bỏ `/api/admin/trich-dan-lai`.
+   - Ca mới: chỉ tìm trong **30 ngày** sau duyệt, ứng viên phải khớp danh mục "Theo dõi đổi trả" trong Cài đặt DVBH
+     (loại yêu cầu + lưu ý lỗi linh kiện, `bat_tat=1`); đã có ca mới thì ngừng tìm, chỉ đọc lại tiến độ ca đó.
+   - Tự kết thúc luồng (cron 02:00) khi không có thông tin mới 30 ngày - nhật ký "Hệ thống": "Tự động kết thúc luồng đổi
+     trả do không tìm thấy thông tin trong 30 ngày". Vẫn gán ca đổi thủ công được sau khi kết thúc (không tự kiểm tra).
+   - Gắn lại ban đêm chỉ thử luồng chưa gắn ≤ 30 ngày. `luong-list?trang_thai=dang_mo|ket_thuc` lọc phía server.

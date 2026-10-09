@@ -120,17 +120,48 @@ export async function ganCaMoi(env: Env, caseGoc: string, caMoiId: string | null
   return { ok: true };
 }
 
-/** Danh sach luong doi tra da gan case (tab "Luồng duyệt đổi trả" tren DVBH). Vai tram dong -> tra het, DVBH loc/phan trang. */
-export async function danhSachLuong(env: Env) {
+/**
+ * Danh sach luong doi tra da gan case (tab "Luồng duyệt đổi trả" tren DVBH). trangThai: "dang_mo" | "ket_thuc" | ""
+ * (tat ca). Mac dinh DVBH chi xin luong dang mo - nho tu ket thuc 30 ngay, so nay giu nho (~so luong moi trong 1-2 thang).
+ */
+export async function danhSachLuong(env: Env, trangThai = "") {
+  const loc = trangThai === "dang_mo" ? " AND l.ket_thuc_at IS NULL" : trangThai === "ket_thuc" ? " AND l.ket_thuc_at IS NOT NULL" : "";
   const r = await env.DB.prepare(
     `SELECT l.dvbh_case_id AS case_id, l.trang_thai, l.loai_yeu_cau, l.serial, l.msg_count, l.origin_at, l.last_at,
             l.tiep_nhan_at, l.de_xuat_at, l.duyet_at, l.giao_xu_ly_at, l.len_so_at, l.len_do_at,
             l.ket_thuc_at, l.ket_thuc_boi, l.created_at,
             m.ca_moi_id, m.trang_thai_gan AS ca_moi_gan, m.ca_moi_tn_at, m.ca_moi_ht_at, m.ca_moi_tien_do
      FROM luong l LEFT JOIN ca_moi m ON m.case_goc = l.dvbh_case_id
-     WHERE l.dvbh_case_id IS NOT NULL
+     WHERE l.dvbh_case_id IS NOT NULL${loc}
      ORDER BY COALESCE(l.last_at, l.created_at) DESC`,
   ).all<Record<string, unknown>>();
   const chuaGan = await env.DB.prepare("SELECT COUNT(*) AS n FROM luong WHERE dvbh_case_id IS NULL").first<{ n: number }>();
   return { rows: r.results, luong_chua_gan: chuaGan?.n ?? 0 };
+}
+
+export const NGAY_TU_KET_THUC = 30;
+export const LY_DO_TU_KET_THUC = `Tự động kết thúc luồng đổi trả do không tìm thấy thông tin trong ${NGAY_TU_KET_THUC} ngày`;
+
+/**
+ * Tu ket thuc luong doi tra dang mo khi KHONG co thong tin moi trong 30 ngay (chay ban dem). "Thong tin moi" = moc moi nhat
+ * trong: thu cuoi, duyet, tao luong, ca moi mo/hoan thanh, nhat ky thao tac (mo lai, gan ca...). Sau khi ket thuc, he thong
+ * khong con truy van DVBH cho ca nay; nguoi dung van nhap ma ca doi thu cong duoc (ganCaMoi - khong ton luot kiem tra).
+ */
+export async function tuKetThucLuong(env: Env) {
+  const r = await env.DB.prepare(
+    `SELECT l.dvbh_case_id AS case_id FROM luong l LEFT JOIN ca_moi m ON m.case_goc = l.dvbh_case_id
+     WHERE l.dvbh_case_id IS NOT NULL AND l.ket_thuc_at IS NULL
+       AND MAX(COALESCE(l.last_at, ''), COALESCE(l.duyet_at, ''), l.created_at, COALESCE(m.ca_moi_tn_at, ''), COALESCE(m.ca_moi_ht_at, ''),
+               COALESCE((SELECT MAX(at) FROM nhat_ky n WHERE n.case_id = l.dvbh_case_id), ''))
+           < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${NGAY_TU_KET_THUC} days')`,
+  ).all<{ case_id: string }>();
+  const stmts = r.results.flatMap(({ case_id }) => [
+    env.DB.prepare(
+      `UPDATE luong SET ket_thuc_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), ket_thuc_boi = ?2, ket_thuc_ghi_chu = ?3
+       WHERE dvbh_case_id = ?1 AND ket_thuc_at IS NULL`,
+    ).bind(case_id, HE_THONG, LY_DO_TU_KET_THUC),
+    ghiNhatKy(env, case_id, "ket_thuc", { nguoi: HE_THONG }, LY_DO_TU_KET_THUC),
+  ]);
+  for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
+  return { ok: true, da_ket_thuc: r.results.map((x) => x.case_id) };
 }
