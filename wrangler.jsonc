@@ -9,6 +9,7 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"]
   },
+  "r2_buckets": [{ "binding": "THU", "bucket_name": "theodoidoimay-thu" }],
   "d1_databases": [
     // D1 rieng cua theodoidoimay (tach khoi DVBH de khong lam nang dvbh-db-smarttrade).
     {

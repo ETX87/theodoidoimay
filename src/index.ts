@@ -19,6 +19,7 @@ import {
 export interface Env {
   DB: D1Database; // thuky-mail-db
   DVBH_DB: D1Database; // dvbh-db-smarttrade - CHI DOC (src/dvbh.ts)
+  THU: R2Bucket; // noi dung day du cua thu (text + html), KHONG luu file dinh kem
   ASSETS: Fetcher;
   ALLOWED_DOMAINS: string; // "dichvu3t.com,karofi.vn"
   THEO_DOI_TU: string; // ngay bat dau theo doi mail (doi soat "co yeu cau doi nhung chua co mail" chi tinh tu ngay nay)
@@ -110,6 +111,11 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   if (p === "/api/admin/dong-bo" && m === "POST") {
     if (!(await safeEqual(req.headers.get("X-Ingest-Key") ?? "", env.INGEST_KEY))) throw new HttpError(401, "Sai INGEST_KEY");
     return json(await dongBoTranhChap(env));
+  }
+  if (p === "/api/admin/trich-dan-lai" && m === "POST") {
+    if (!(await safeEqual(req.headers.get("X-Ingest-Key") ?? "", env.INGEST_KEY))) throw new HttpError(401, "Sai INGEST_KEY");
+    const so = Math.min(300, Math.max(1, Number(url.searchParams.get("so") ?? 100)));
+    return json(await trichDanLai(env, Number(url.searchParams.get("tu") ?? 0), so));
   }
   if (p === "/api/admin/tu-ket-thuc" && m === "POST") {
     if (!(await safeEqual(req.headers.get("X-Ingest-Key") ?? "", env.INGEST_KEY))) throw new HttpError(401, "Sai INGEST_KEY");
@@ -208,7 +214,7 @@ async function ingest(env: Env, payload: unknown) {
       .first();
     if (dup) {
       out.duplicates++;
-      if (msg.html) await boSungHtml(env, msg, out);
+      await boSungHtml(env, msg, out);
       continue;
     }
 
@@ -236,9 +242,9 @@ async function ingest(env: Env, payload: unknown) {
 
     const { luongId, method } = await timLuong(env, { maCase, refIds, threadId: msg.threadId ?? "", serial, sentAt: msg.sentAt });
 
-    // Chot 2026-10-09: KHONG luu toan van thu/dinh kem (R2) - chi luu thong tin luong mail trong D1. Ban goc va dinh kem
-    // van nam trong Gmail theodoidoimay (link "Mở trong Gmail").
-    const r2Key = "";
+    // Noi dung day du (text + html) luu R2 de D1 nhe; KHONG luu file dinh kem (chi ten/dung luong trong D1, ban goc o Gmail).
+    const r2Key = `thu/${msg.gmailId}.json`;
+    await luuR2(env, r2Key, msg);
 
     const bodyNew = phanMoi(body).slice(0, 20_000);
     const values = {
@@ -320,18 +326,77 @@ async function luuTrichDan(env: Env, body: string, values: ThuValues): Promise<n
   return n;
 }
 
-/** Thu da luu duoc gui lai kem HTML (quet lai Gmail) -> bo sung bang de xuat cho luong neu luong chua co. */
+function luuR2(env: Env, key: string, msg: InMessage) {
+  return env.THU.put(
+    key,
+    JSON.stringify({ subject: msg.subject ?? "", from: msg.from, to: msg.to, cc: msg.cc, body: msg.body ?? "", html: msg.html ?? "" }),
+    { httpMetadata: { contentType: "application/json; charset=utf-8" } },
+  );
+}
+
+/**
+ * Thu da luu duoc gui lai (quet lai Gmail): bu ban R2 neu con thieu (vd thu nhan luc 2026-10-09 khi tam tat R2) hoac ban cu
+ * chua co HTML; bo sung bang de xuat cho luong neu luong chua co. Khong them/xoa thu nao.
+ */
 async function boSungHtml(env: Env, msg: InMessage & { sentAt: string }, out: { htmlBoSung?: number }): Promise<void> {
   const row = await env.DB.prepare(
-    `SELECT t.luong_id, l.de_xuat_json FROM thu t JOIN luong l ON l.id = t.luong_id WHERE t.gmail_id = ? AND t.nguon = 'gmail'`,
+    `SELECT t.id, t.luong_id, t.r2_key, l.de_xuat_json FROM thu t JOIN luong l ON l.id = t.luong_id WHERE t.gmail_id = ? AND t.nguon = 'gmail'`,
   )
     .bind(msg.gmailId)
-    .first<{ luong_id: number; de_xuat_json: string }>();
-  if (!row || row.de_xuat_json !== "{}") return;
+    .first<{ id: number; luong_id: number; r2_key: string; de_xuat_json: string }>();
+  if (!row) return;
+  let bu = false;
+  if (!row.r2_key) {
+    const key = `thu/${msg.gmailId}.json`;
+    await luuR2(env, key, msg);
+    await env.DB.prepare("UPDATE thu SET r2_key = ? WHERE id = ?").bind(key, row.id).run();
+    bu = true;
+  } else if (msg.html) {
+    const cu = await env.THU.get(row.r2_key);
+    if (!cu || !((await cu.json()) as { html?: string }).html) {
+      await luuR2(env, row.r2_key, msg);
+      bu = true;
+    }
+  }
   const bang = bangDeXuat(msg.html ?? "");
-  if (!Object.keys(bang).length) return;
-  await env.DB.prepare("UPDATE luong SET de_xuat_json = ? WHERE id = ?").bind(JSON.stringify(bang), row.luong_id).run();
-  out.htmlBoSung = (out.htmlBoSung ?? 0) + 1;
+  if (row.de_xuat_json === "{}" && Object.keys(bang).length) {
+    await env.DB.prepare("UPDATE luong SET de_xuat_json = ? WHERE id = ?").bind(JSON.stringify(bang), row.luong_id).run();
+    bu = true;
+  }
+  if (bu) out.htmlBoSung = (out.htmlBoSung ?? 0) + 1;
+}
+
+/**
+ * Tach lai phan trich dan cua thu that da luu (doc noi dung tu R2) - bu thu trich dan bi bo sot khi doi quy tac. Chay THEO
+ * DOT de khong vuot gioi han 1 request Worker: ?tu=<id thu> (mac dinh 0) &so=<so thu, mac dinh 100, toi da 300>; tra ve
+ * "tiep_tu" de goi dot ke (null = het). Chi THEM thu con thieu; tinh lai moc cac luong co them.
+ */
+async function trichDanLai(env: Env, tu: number, so: number) {
+  const rows = await env.DB.prepare(
+    `SELECT id, luong_id, thread_id, from_email, to_addr, subject, sent_at, r2_key FROM thu
+     WHERE nguon = 'gmail' AND r2_key != '' AND id > ?1 ORDER BY id LIMIT ?2`,
+  )
+    .bind(tu, so)
+    .all<{ id: number; luong_id: number; thread_id: string; from_email: string; to_addr: string; subject: string; sent_at: string; r2_key: string }>();
+  let them = 0;
+  const luongCoThem = new Set<number>();
+  for (const t of rows.results) {
+    const obj = await env.THU.get(t.r2_key);
+    if (!obj) continue;
+    const goc = (await obj.json()) as { body?: string };
+    const n = await luuTrichDan(env, goc.body ?? "", {
+      luongId: t.luong_id, nguon: "trich_dan", gmailId: "", threadId: t.thread_id, messageId: "", inReplyTo: "", refs: "",
+      from: { name: "", email: t.from_email }, to: t.to_addr, cc: "", subject: t.subject, sentAt: t.sent_at, bodyNew: "",
+      r2Key: "", attachments: "[]", method: "trich_dan", laDeXuat: 0, laDuyet: 0, moc: "",
+    });
+    if (n) {
+      them += n;
+      luongCoThem.add(t.luong_id);
+    }
+  }
+  for (const id of luongCoThem) await tinhLaiMoc(env, id);
+  const cuoi = rows.results.at(-1)?.id ?? null;
+  return { ok: true, so_thu: rows.results.length, trich_dan_them: them, luong_tinh_lai: [...luongCoThem], tiep_tu: rows.results.length === so ? cuoi : null };
 }
 
 async function timLuong(
