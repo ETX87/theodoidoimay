@@ -269,7 +269,7 @@ async function openDrawer(caseId) {
     <div class="muted">KTV: ${esc(h.ky_thuat_vien) || "—"} · Phân loại DVBH: ${esc(h.phan_loai) || "—"} · Trạng thái DVBH: ${esc(tcNhan(h.tc_trang_thai))}</div>
     ${caMoiHtml(cm)}
     <ul class="tl">${ev.map((e) => `<li><div class="t">${fmtFull(e.at)} · ${esc(e.nguon)}${e.ai ? " · " + esc(e.ai) : ""}</div>
-      <div><b>${esc(e.tieu_de)}</b>${e.link ? ` · <a href="${e.link}" target="_blank" rel="noreferrer">Gmail</a>` : ""}</div>
+      <div><b>${esc(e.tieu_de)}</b>${e.link ? ` · <a href="${esc(e.link)}" target="_blank" rel="noreferrer">Gmail</a>` : ""}</div>
       ${e.noi_dung ? `<div class="b">${esc(e.noi_dung.length > 600 ? e.noi_dung.slice(0, 600) + "…" : e.noi_dung)}</div>` : ""}</li>`).join("")}</ul>`;
   $("closeDrawer").onclick = () => $("drawer").classList.remove("on");
   for (const b of $("drawer").querySelectorAll("button[data-camoi]")) {

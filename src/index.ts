@@ -26,6 +26,7 @@ export interface Env {
   APP_PASSWORD: string;
   PARTNER_API_KEY: string; // DVBH goi GET /api/partner/case (Service Binding)
   INGEST_KEY: string;
+  LOGIN_LIMIT: RateLimit; // gioi han dang nhap theo IP (chong do mat khau)
 }
 
 const MATCH_STATUSES = ["da_gan", "chua_gan", "nhieu_ung_vien", "cho_dvbh"] as const;
@@ -796,6 +797,9 @@ async function stats(env: Env) {
 // ---------------------------------------------------------------- dang nhap
 
 async function login(req: Request, env: Env): Promise<Response> {
+  // Chong do mat khau: toi da 5 lan / 60 giay / IP (binding ratelimits trong wrangler.jsonc).
+  const ip = req.headers.get("CF-Connecting-IP") ?? "unknown";
+  if (!(await env.LOGIN_LIMIT.limit({ key: ip })).success) throw new HttpError(429, "Thử quá nhiều lần, đợi 1 phút rồi thử lại");
   const { password } = ((await req.json().catch(() => ({}))) ?? {}) as { password?: string };
   if (!env.APP_PASSWORD || !(await safeEqual(String(password ?? ""), env.APP_PASSWORD))) {
     await new Promise((r) => setTimeout(r, 800));
@@ -866,6 +870,13 @@ function toIso(date: string): string {
 function json(data: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...headers },
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY",
+      "Referrer-Policy": "no-referrer",
+      ...headers,
+    },
   });
 }

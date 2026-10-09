@@ -1,0 +1,8 @@
+# Header bao mat cho trang bao cao (Workers Static Assets). Trang dung <script>/<style> inline nen can 'unsafe-inline';
+# connect-src 'self' chan gui du lieu ra ngoai, frame-ancestors 'none' chan nhung trang vao iframe (clickjacking).
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
