@@ -10,8 +10,6 @@
     "run_worker_first": ["/api/*"]
   },
   "r2_buckets": [{ "binding": "THU", "bucket_name": "theodoidoimay-thu" }],
-  // Gioi han dang nhap trang bao cao: 5 lan / 60 giay / IP.
-  "ratelimits": [{ "name": "LOGIN_LIMIT", "namespace_id": "1001", "simple": { "limit": 5, "period": 60 } }],
   "d1_databases": [
     // D1 rieng cua theodoidoimay (tach khoi DVBH de khong lam nang dvbh-db-smarttrade).
     {

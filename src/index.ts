@@ -26,7 +26,6 @@ export interface Env {
   APP_PASSWORD: string;
   PARTNER_API_KEY: string; // DVBH goi GET /api/partner/case (Service Binding)
   INGEST_KEY: string;
-  LOGIN_LIMIT: RateLimit; // gioi han dang nhap theo IP (chong do mat khau)
 }
 
 const MATCH_STATUSES = ["da_gan", "chua_gan", "nhieu_ung_vien", "cho_dvbh"] as const;
@@ -66,6 +65,7 @@ export default {
     ).all<{ id: number }>();
     for (const { id } of pending.results) await ganDvbh(env, id);
     await env.DB.prepare(`DELETE FROM bo_qua WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${BO_QUA_GIU_NGAY} days')`).run();
+    await env.DB.prepare("DELETE FROM dang_nhap_sai WHERE at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')").run();
   },
 } satisfies ExportedHandler<Env>;
 
@@ -797,11 +797,17 @@ async function stats(env: Env) {
 // ---------------------------------------------------------------- dang nhap
 
 async function login(req: Request, env: Env): Promise<Response> {
-  // Chong do mat khau: toi da 5 lan / 60 giay / IP (binding ratelimits trong wrangler.jsonc).
+  // Chong do mat khau: >= 10 lan SAI / 15 phut / IP -> tu choi (bang dang_nhap_sai, migration 0008).
   const ip = req.headers.get("CF-Connecting-IP") ?? "unknown";
-  if (!(await env.LOGIN_LIMIT.limit({ key: ip })).success) throw new HttpError(429, "Thử quá nhiều lần, đợi 1 phút rồi thử lại");
+  const sai = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM dang_nhap_sai WHERE ip = ? AND at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-15 minutes')",
+  )
+    .bind(ip)
+    .first<{ n: number }>();
+  if ((sai?.n ?? 0) >= 10) throw new HttpError(429, "Sai mật khẩu quá nhiều lần, đợi 15 phút rồi thử lại");
   const { password } = ((await req.json().catch(() => ({}))) ?? {}) as { password?: string };
   if (!env.APP_PASSWORD || !(await safeEqual(String(password ?? ""), env.APP_PASSWORD))) {
+    await env.DB.prepare("INSERT INTO dang_nhap_sai (ip) VALUES (?)").bind(ip).run();
     await new Promise((r) => setTimeout(r, 800));
     throw new HttpError(401, "Sai mật khẩu");
   }
