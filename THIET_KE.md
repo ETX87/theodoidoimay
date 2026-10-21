@@ -138,4 +138,7 @@ danh sách đối soát (có khiếu nại đổi máy nhưng không có mail, c
      (loại yêu cầu + lưu ý lỗi linh kiện, `bat_tat=1`); đã có ca mới thì ngừng tìm, chỉ đọc lại tiến độ ca đó.
    - Tự kết thúc luồng (cron 02:00) khi không có thông tin mới 30 ngày - nhật ký "Hệ thống": "Tự động kết thúc luồng đổi
      trả do không tìm thấy thông tin trong 30 ngày". Vẫn gán ca đổi thủ công được sau khi kết thúc (không tự kiểm tra).
+   - (2026-10-21) Tự đóng sau SO/DO: luồng đã lên SO (hoặc DO nếu không có mốc SO) quá **3 ngày** → cron 02:00 tự kết thúc,
+     ghi chú + nhật ký "Hệ thống": "Tự động đóng do KRF đã lên đơn trả" (`doiTra.ts tuDongSauSoDo`, chạy trước quy tắc 30
+     ngày). Bỏ qua ca người dùng đã từng "mở lại".
    - Gắn lại ban đêm chỉ thử luồng chưa gắn ≤ 30 ngày. `luong-list?trang_thai=dang_mo|ket_thuc` lọc phía server.

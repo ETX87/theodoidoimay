@@ -147,7 +147,33 @@ export const LY_DO_TU_KET_THUC = `Tự động kết thúc luồng đổi trả 
  * trong: thu cuoi, duyet, tao luong, ca moi mo/hoan thanh, nhat ky thao tac (mo lai, gan ca...). Sau khi ket thuc, he thong
  * khong con truy van DVBH cho ca nay; nguoi dung van nhap ma ca doi thu cong duoc (ganCaMoi - khong ton luot kiem tra).
  */
+// (2026-10-21, chu he thong) Luong da len SO hoac DO (Karofi da lap don tra) -> du NGAY_TU_DONG_SAU_SO_DO ngay ke tu moc dau
+// tien (len_so_at, khong co thi len_do_at) thi tu ket thuc. Bo qua ca nguoi dung da tung "mo lai" (ton trong quyet dinh tay).
+export const NGAY_TU_DONG_SAU_SO_DO = 3;
+export const LY_DO_TU_DONG_SO_DO = "Tự động đóng do KRF đã lên đơn trả";
+
+async function tuDongSauSoDo(env: Env): Promise<string[]> {
+  const r = await env.DB.prepare(
+    `SELECT l.dvbh_case_id AS case_id FROM luong l
+     WHERE l.dvbh_case_id IS NOT NULL AND l.ket_thuc_at IS NULL AND COALESCE(l.len_so_at, l.len_do_at) IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM nhat_ky n WHERE n.case_id = l.dvbh_case_id AND n.hanh_dong = 'mo_lai')
+     GROUP BY l.dvbh_case_id
+     HAVING MIN(COALESCE(l.len_so_at, l.len_do_at)) < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${NGAY_TU_DONG_SAU_SO_DO} days')`,
+  ).all<{ case_id: string }>();
+  const stmts = r.results.flatMap(({ case_id }) => [
+    env.DB.prepare(
+      `UPDATE luong SET ket_thuc_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), ket_thuc_boi = ?2, ket_thuc_ghi_chu = ?3
+       WHERE dvbh_case_id = ?1 AND ket_thuc_at IS NULL`,
+    ).bind(case_id, HE_THONG, LY_DO_TU_DONG_SO_DO),
+    ghiNhatKy(env, case_id, "ket_thuc", { nguoi: HE_THONG }, LY_DO_TU_DONG_SO_DO),
+  ]);
+  for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
+  return r.results.map((x) => x.case_id);
+}
+
 export async function tuKetThucLuong(env: Env) {
+  // Chay truoc quy tac "khong co thong tin 30 ngay" de ca da len SO/DO ghi dung ly do.
+  const daDongSoDo = await tuDongSauSoDo(env);
   const r = await env.DB.prepare(
     `SELECT l.dvbh_case_id AS case_id FROM luong l LEFT JOIN ca_moi m ON m.case_goc = l.dvbh_case_id
      WHERE l.dvbh_case_id IS NOT NULL AND l.ket_thuc_at IS NULL
@@ -163,5 +189,5 @@ export async function tuKetThucLuong(env: Env) {
     ghiNhatKy(env, case_id, "ket_thuc", { nguoi: HE_THONG }, LY_DO_TU_KET_THUC),
   ]);
   for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
-  return { ok: true, da_ket_thuc: r.results.map((x) => x.case_id) };
+  return { ok: true, da_ket_thuc: r.results.map((x) => x.case_id), da_dong_so_do: daDongSoDo };
 }
